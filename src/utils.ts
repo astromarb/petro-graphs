@@ -49,6 +49,11 @@ export function niceScaleBar(
   };
 }
 
+/** Convert typographic points to canvas pixels at a given DPI. */
+export const ptToPx = (pt: number, dpi: number): number => Math.round(pt * dpi / 72);
+/** Convert canvas pixels to typographic points at a given DPI. */
+export const pxToPt = (px: number, dpi: number): number => Math.round(px * 72 / dpi);
+
 export const NAMED_COLORS: Record<string, string> = {
   White: '#ffffff',
   Black: '#000000',

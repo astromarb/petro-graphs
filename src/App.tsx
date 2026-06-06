@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import Topbar from './components/Topbar';
+import PageTabs from './components/PageTabs';
 import LeftSidebar from './components/LeftSidebar';
 import CanvasArea from './components/CanvasArea';
 import RightSidebar from './components/RightSidebar';
@@ -84,6 +85,7 @@ export default function App() {
   return (
     <div className="app-shell">
       <Topbar />
+      <PageTabs />
       <LeftSidebar />
       <CanvasArea />
       <RightSidebar />

@@ -236,7 +236,7 @@ function GroupCard({ group }: { group: ImageGroup }) {
 
 // ── Left sidebar ──────────────────────────────────────────────────────────
 export default function LeftSidebar() {
-  const { groups, addGroup, doc, setDocMeta } = useStore();
+  const { groups, addGroup, doc, setDocMeta, flipOrientation } = useStore();
   const [canvasW, setCanvasW] = useState(String(doc.width));
   const [canvasH, setCanvasH] = useState(String(doc.height));
 
@@ -280,9 +280,9 @@ export default function LeftSidebar() {
             style={{ marginBottom: 1, flexShrink: 0 }}
             title="Flip orientation (swap W ↔ H)"
             onClick={() => {
-              setCanvasW(canvasH);
-              setCanvasH(canvasW);
-              setDocMeta({ width: parseInt(canvasH) || doc.height, height: parseInt(canvasW) || doc.width });
+              setCanvasW(String(doc.height));
+              setCanvasH(String(doc.width));
+              flipOrientation();
             }}
           >
             <ArrowLeftRight size={13} />
@@ -296,21 +296,27 @@ export default function LeftSidebar() {
 
         {/* Page presets */}
         <div className="input-label">Page preset</div>
-        <select
-          className="select"
-          style={{ marginBottom: 6, fontSize: 11 }}
-          defaultValue=""
-          onChange={e => {
-            const idx = parseInt(e.target.value);
-            if (!isNaN(idx)) applyPreset(PAGE_PRESETS[idx]);
-            e.target.value = '';
-          }}
-        >
-          <option value="" disabled>Choose a preset…</option>
-          {PAGE_PRESETS.map((p, i) => (
-            <option key={i} value={i}>{p.label}</option>
-          ))}
-        </select>
+        {(() => {
+          const matchIdx = PAGE_PRESETS.findIndex(
+            p => p.w === doc.width && p.h === doc.height && p.dpi === doc.dpi
+          );
+          return (
+            <select
+              className="select"
+              style={{ marginBottom: 6, fontSize: 11 }}
+              value={matchIdx !== -1 ? String(matchIdx) : 'custom'}
+              onChange={e => {
+                const idx = parseInt(e.target.value);
+                if (!isNaN(idx)) applyPreset(PAGE_PRESETS[idx]);
+              }}
+            >
+              {matchIdx === -1 && <option value="custom" disabled>Custom ({doc.width} × {doc.height} px)</option>}
+              {PAGE_PRESETS.map((p, i) => (
+                <option key={i} value={String(i)}>{p.label}</option>
+              ))}
+            </select>
+          );
+        })()}
 
         <div style={{ display: 'flex', gap: 5, alignItems: 'flex-end' }}>
           <button className="btn btn-ghost" style={{ flex: 1, fontSize: 11 }} onClick={applySize}>

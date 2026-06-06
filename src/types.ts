@@ -80,13 +80,14 @@ export interface ImageObject extends CanvasObjectBase {
 
 export type TextStyle = 'h1' | 'h2' | 'h3' | 'body' | 'caption' | 'custom';
 
+/** Font sizes are in typographic points (pt). Convert to px with ptToPx(size, dpi) before storing. */
 export const TEXT_STYLE_PRESETS: Record<TextStyle, { fontSize: number; fontWeight: 'normal' | 'bold'; label: string }> = {
-  h1:      { fontSize: 36, fontWeight: 'bold',   label: 'Heading 1' },
-  h2:      { fontSize: 28, fontWeight: 'bold',   label: 'Heading 2' },
-  h3:      { fontSize: 22, fontWeight: 'bold',   label: 'Heading 3' },
-  body:    { fontSize: 14, fontWeight: 'normal', label: 'Body' },
-  caption: { fontSize: 11, fontWeight: 'normal', label: 'Caption' },
-  custom:  { fontSize: 16, fontWeight: 'normal', label: 'Custom' },
+  h1:      { fontSize: 24, fontWeight: 'bold',   label: 'Heading 1' },
+  h2:      { fontSize: 18, fontWeight: 'bold',   label: 'Heading 2' },
+  h3:      { fontSize: 14, fontWeight: 'bold',   label: 'Heading 3' },
+  body:    { fontSize: 10, fontWeight: 'normal', label: 'Body' },
+  caption: { fontSize:  8, fontWeight: 'normal', label: 'Caption' },
+  custom:  { fontSize: 12, fontWeight: 'normal', label: 'Custom' },
 };
 
 export interface TextObject extends CanvasObjectBase {

@@ -12,7 +12,7 @@ import type {
   BorderStyle, ImageAdjustments, ScaleBarObject as SBO, TextStyle,
 } from '../types';
 import { DEFAULT_ADJUSTMENTS, TEXT_STYLE_PRESETS } from '../types';
-import { BORDER_COLORS as COLORS, niceScaleBar, UNIT_METERS, convertUnit } from '../utils';
+import { BORDER_COLORS as COLORS, niceScaleBar, UNIT_METERS, convertUnit, ptToPx, pxToPt } from '../utils';
 import { nanoid } from '../utils';
 import { Ruler } from 'lucide-react';
 
@@ -212,7 +212,7 @@ function AdjustmentsPanel({ adj, onChange }: {
 }
 
 // ── Image object panel ───────────────────────────────────────────────────
-function ImagePanel({ obj, update }: { obj: ImageObject; update: (p: Partial<ImageObject>) => void }) {
+function ImagePanel({ obj, update, dpi }: { obj: ImageObject; update: (p: Partial<ImageObject>) => void; dpi: number }) {
   const { groups, addObject, pushCalibration } = useStore();
   const srcImg = groups.flatMap(g => g.images).find(i => i.id === obj.imageId);
   const cal = srcImg?.calibration;
@@ -226,11 +226,12 @@ function ImagePanel({ obj, update }: { obj: ImageObject; update: (p: Partial<Ima
     const sb: SBO = {
       id: nanoid(), type: 'scalebar',
       x: obj.x + 10, y: obj.y + obj.height - 40,
-      width: canvasPx + 20, height: 36,
+      width: canvasPx, height: 36,
       rotation: 0, locked: false, visible: true,
       label: `${realLength} ${unit}`,
       length: canvasPx, realLength, unit,
-      color: '#ffffff', labelColor: '#ffffff', thickness: 4, fontSize: 13,
+      color: '#ffffff', labelColor: '#ffffff', thickness: 4,
+      fontSize: ptToPx(8, dpi),
       metersPerCanvasPx,
     };
     addObject(sb);
@@ -338,11 +339,11 @@ function ImagePanel({ obj, update }: { obj: ImageObject; update: (p: Partial<Ima
 }
 
 // ── Text object panel ────────────────────────────────────────────────────
-function TextPanel({ obj, update }: { obj: TextObject; update: (p: Partial<TextObject>) => void }) {
+function TextPanel({ obj, update, dpi }: { obj: TextObject; update: (p: Partial<TextObject>) => void; dpi: number }) {
   const applyStyle = (s: TextStyle) => {
     if (s === 'custom') { update({ textStyle: 'custom' }); return; }
     const p = TEXT_STYLE_PRESETS[s];
-    update({ textStyle: s, fontSize: p.fontSize, fontWeight: p.fontWeight });
+    update({ textStyle: s, fontSize: ptToPx(p.fontSize, dpi), fontWeight: p.fontWeight });
   };
 
   return (
@@ -401,10 +402,10 @@ function TextPanel({ obj, update }: { obj: TextObject; update: (p: Partial<TextO
       <div>
         <div className="input-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
           <span>Font size</span>
-          <span style={{ color: 'var(--text-primary)' }}>{obj.fontSize}px</span>
+          <span style={{ color: 'var(--text-primary)' }}>{pxToPt(obj.fontSize, dpi)} pt</span>
         </div>
-        <input type="range" min={8} max={96} value={obj.fontSize}
-          onChange={e => update({ fontSize: +e.target.value, textStyle: 'custom' })} style={{ width: '100%' }} />
+        <input type="range" min={6} max={72} value={pxToPt(obj.fontSize, dpi)}
+          onChange={e => update({ fontSize: ptToPx(+e.target.value, dpi), textStyle: 'custom' })} style={{ width: '100%' }} />
       </div>
 
       <div>
@@ -486,7 +487,7 @@ function ShapePanel({ obj, update }: { obj: ShapeObject; update: (p: Partial<Sha
 // ── Scale bar panel ───────────────────────────────────────────────────────
 const SCALE_UNITS_SIDEBAR = ['µm', 'nm', 'mm', 'cm', 'm', 'km', 'Å'] as const;
 
-function ScaleBarPanel({ obj, update }: { obj: ScaleBarObject; update: (p: Partial<ScaleBarObject>) => void }) {
+function ScaleBarPanel({ obj, update, dpi }: { obj: ScaleBarObject; update: (p: Partial<ScaleBarObject>) => void; dpi: number }) {
   const hasCal = obj.metersPerCanvasPx != null;
 
   const handleLengthChange = (newLen: number) => {
@@ -563,10 +564,10 @@ function ScaleBarPanel({ obj, update }: { obj: ScaleBarObject; update: (p: Parti
       <div>
         <div className="input-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
           <span>Label font size</span>
-          <span style={{ color: 'var(--text-primary)' }}>{obj.fontSize ?? 13}px</span>
+          <span style={{ color: 'var(--text-primary)' }}>{pxToPt(obj.fontSize ?? 13, dpi)} pt</span>
         </div>
-        <input type="range" min={8} max={32} value={obj.fontSize ?? 13}
-          onChange={e => update({ fontSize: +e.target.value })} style={{ width: '100%' }} />
+        <input type="range" min={6} max={24} value={pxToPt(obj.fontSize ?? 13, dpi)}
+          onChange={e => update({ fontSize: ptToPx(+e.target.value, dpi) })} style={{ width: '100%' }} />
       </div>
       <div>
         <div className="input-label">Color</div>
@@ -651,10 +652,10 @@ export default function RightSidebar() {
 
       <div className="scroll-area">
         <div className="panel-section">
-          {obj.type === 'image'    && <ImagePanel    obj={obj} update={p => update(p as Partial<CanvasObject>)} />}
-          {obj.type === 'text'     && <TextPanel     obj={obj} update={p => update(p as Partial<CanvasObject>)} />}
+          {obj.type === 'image'    && <ImagePanel    obj={obj} update={p => update(p as Partial<CanvasObject>)} dpi={doc.dpi} />}
+          {obj.type === 'text'     && <TextPanel     obj={obj} update={p => update(p as Partial<CanvasObject>)} dpi={doc.dpi} />}
           {obj.type === 'shape'    && <ShapePanel    obj={obj} update={p => update(p as Partial<CanvasObject>)} />}
-          {obj.type === 'scalebar' && <ScaleBarPanel obj={obj} update={p => update(p as Partial<CanvasObject>)} />}
+          {obj.type === 'scalebar' && <ScaleBarPanel obj={obj} update={p => update(p as Partial<CanvasObject>)} dpi={doc.dpi} />}
         </div>
 
         <div className="panel-section">
