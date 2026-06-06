@@ -3,10 +3,11 @@ import * as fabric from 'fabric';
 import { useStore } from '../store';
 import type {
   CanvasObject, ImageObject, TextObject, ShapeObject, ScaleBarObject,
-  BorderStyle, InsetPair, ThinSectionImage, ImageAdjustments,
+  BorderStyle, InsetPair, ThinSectionImage, ImageAdjustments, ScaleUnit,
 } from '../types';
 import { DEFAULT_ADJUSTMENTS } from '../types';
 import { nanoid } from '../utils';
+import { renderLatexToDataUrl } from '../latexRenderer';
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -66,6 +67,117 @@ async function cropDataUrl(
   });
 }
 
+function scenePoint(options: fabric.TEvent): fabric.Point | null {
+  const o = options as unknown as { scenePoint?: fabric.Point; absolutePointer?: fabric.Point };
+  return o.scenePoint ?? o.absolutePointer ?? null;
+}
+
+const SCALE_UNITS: ScaleUnit[] = ['µm', 'nm', 'mm', 'cm', 'm', 'km', 'Å'];
+
+// ── Scale bar input dialog ────────────────────────────────────────────────
+
+interface ScaleDialogProps {
+  pixelLength: number;
+  onConfirm: (realLength: number, unit: ScaleUnit, color: string, thickness: number, fontSize: number) => void;
+  onCancel: () => void;
+}
+
+function ScaleBarDialog({ pixelLength, onConfirm, onCancel }: ScaleDialogProps) {
+  const [val,       setVal]       = useState('100');
+  const [unit,      setUnit]      = useState<ScaleUnit>('µm');
+  const [color,     setColor]     = useState('#ffffff');
+  const [thickness, setThickness] = useState(4);
+  const [fontSize,  setFontSize]  = useState(13);
+
+  const handleConfirm = () => {
+    const n = parseFloat(val);
+    if (isNaN(n) || n <= 0) return;
+    onConfirm(n, unit, color, thickness, fontSize);
+  };
+
+  return (
+    <div style={{
+      position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
+      background: 'var(--bg-surface)', border: '1px solid var(--accent)',
+      borderRadius: 10, padding: '14px 18px', zIndex: 30,
+      boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+      minWidth: 320,
+    }}>
+      <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 12, color: 'var(--text-primary)' }}>
+        Scale Bar — {Math.round(pixelLength)} px drawn
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div>
+          <div className="input-label">Real-world length</div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input
+              className="input"
+              type="number"
+              min="0.001"
+              step="any"
+              value={val}
+              onChange={e => setVal(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') handleConfirm(); if (e.key === 'Escape') onCancel(); }}
+              autoFocus
+              style={{ flex: 1 }}
+            />
+            <select
+              className="select"
+              value={unit}
+              onChange={e => setUnit(e.target.value as ScaleUnit)}
+              style={{ width: 72 }}
+            >
+              {SCALE_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: 10 }}>
+          <div style={{ flex: 1 }}>
+            <div className="input-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span>Thickness</span><span style={{ color: 'var(--text-primary)' }}>{thickness}px</span>
+            </div>
+            <input type="range" min={1} max={12} value={thickness}
+              onChange={e => setThickness(+e.target.value)} style={{ width: '100%' }} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <div className="input-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span>Font size</span><span style={{ color: 'var(--text-primary)' }}>{fontSize}px</span>
+            </div>
+            <input type="range" min={8} max={32} value={fontSize}
+              onChange={e => setFontSize(+e.target.value)} style={{ width: '100%' }} />
+          </div>
+        </div>
+
+        <div>
+          <div className="input-label">Color</div>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <input type="color" value={color} onChange={e => setColor(e.target.value)}
+              style={{ width: 28, height: 26, border: '1px solid var(--border)', borderRadius: 4, padding: 1, background: 'none', cursor: 'pointer' }} />
+            <input className="input" value={color} onChange={e => setColor(e.target.value)} />
+            {['#ffffff', '#000000', '#ffcc00', '#00ccff', '#ff6060'].map(c => (
+              <div key={c}
+                onClick={() => setColor(c)}
+                style={{
+                  width: 18, height: 18, borderRadius: '50%', background: c, cursor: 'pointer',
+                  border: color === c ? '2px solid var(--accent)' : '1px solid rgba(255,255,255,0.2)',
+                  flexShrink: 0,
+                }}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, marginTop: 14, justifyContent: 'flex-end' }}>
+        <button className="btn btn-ghost" onClick={onCancel}>Cancel</button>
+        <button className="btn btn-primary" onClick={handleConfirm}>Add Scale Bar</button>
+      </div>
+    </div>
+  );
+}
+
 // ── Component ─────────────────────────────────────────────────────────────
 
 export default function CanvasArea() {
@@ -95,26 +207,32 @@ export default function CanvasArea() {
   const [insetSourceId, setInsetSourceId] = useState<string | null>(null);
   const cropRectRef = useRef<fabric.Rect | null>(null);
 
+  // ── Scalebar draw state ───────────────────────────────────────────────
+  const [scalebarPhase, setScalebarPhase] = useState<'idle' | 'drawing' | 'dialog'>('idle');
+  const scalebarPreviewRef = useRef<fabric.Line | null>(null);
+  const scalebarDrawRef    = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+
   // ── Connector lines: pairId → {line, indicator} ──────────────────────
   const connectorMapRef = useRef<Map<string, { line: fabric.Line; indicator: fabric.Rect }>>(new Map());
 
-  // ── Refs to latest tool/zoom (used in stable fabric event handlers) ───
+  // ── Refs to latest values (used in stable fabric event handlers) ──────
   const toolRef = useRef(tool);
   useEffect(() => { toolRef.current = tool; }, [tool]);
   const zoomRef = useRef(zoom);
   useEffect(() => { zoomRef.current = zoom; }, [zoom]);
 
-  // Stable refs to callbacks (zustand actions are stable, but let's be safe)
   const addObjectRef = useRef(addObject);
   useEffect(() => { addObjectRef.current = addObject; }, [addObject]);
   const setSelectedIdRef = useRef(setSelectedId);
   useEffect(() => { setSelectedIdRef.current = setSelectedId; }, [setSelectedId]);
 
-  // Inset phase/source refs so fabric handlers can read latest values
   const insetPhaseRef    = useRef(insetPhase);
   const insetSourceIdRef = useRef(insetSourceId);
   useEffect(() => { insetPhaseRef.current = insetPhase; }, [insetPhase]);
   useEffect(() => { insetSourceIdRef.current = insetSourceId; }, [insetSourceId]);
+
+  const scalebarPhaseRef = useRef(scalebarPhase);
+  useEffect(() => { scalebarPhaseRef.current = scalebarPhase; }, [scalebarPhase]);
 
   // ── Initialize Fabric canvas (once) ──────────────────────────────────
   useEffect(() => {
@@ -139,33 +257,80 @@ export default function CanvasArea() {
     fc.on('object:modified', (e) => {
       const fObj = e.target as fabric.FabricObject & { storeId?: string };
       if (!fObj?.storeId) return;
-      // Skip the crop rect
       if (fObj === cropRectRef.current) return;
       useStore.getState().updateObject(fObj.storeId, {
         x: fObj.left ?? 0,
-        y: fObj.top ?? 0,
+        y: fObj.top  ?? 0,
         width:  (fObj.width  ?? 1) * (fObj.scaleX ?? 1),
         height: (fObj.height ?? 1) * (fObj.scaleY ?? 1),
         rotation: fObj.angle ?? 0,
       });
     });
 
-    // ── mouse:up: place text/shape/scalebar or start inset ──────────────
+    // ── mouse:down — start scalebar draw ─────────────────────────────
+    fc.on('mouse:down', (options) => {
+      if (toolRef.current !== 'scalebar') return;
+      if (scalebarPhaseRef.current !== 'idle') return;
+      const pt = scenePoint(options);
+      if (!pt) return;
+
+      const line = new fabric.Line([pt.x, pt.y, pt.x, pt.y], {
+        stroke: '#ffcc00', strokeWidth: 3,
+        selectable: false, evented: false,
+        strokeLineCap: 'round',
+      });
+      scalebarPreviewRef.current = line;
+      scalebarDrawRef.current = { x1: pt.x, y1: pt.y, x2: pt.x, y2: pt.y };
+      fc.add(line);
+      fc.renderAll();
+      setScalebarPhase('drawing');
+    });
+
+    // ── mouse:move — update scalebar preview line ─────────────────────
+    fc.on('mouse:move', (options) => {
+      if (toolRef.current !== 'scalebar') return;
+      if (scalebarPhaseRef.current !== 'drawing') return;
+      const pt = scenePoint(options);
+      if (!pt || !scalebarPreviewRef.current || !scalebarDrawRef.current) return;
+      scalebarPreviewRef.current.set({ x2: pt.x, y2: pt.y });
+      scalebarDrawRef.current.x2 = pt.x;
+      scalebarDrawRef.current.y2 = pt.y;
+      fc.renderAll();
+    });
+
+    // ── mouse:up — place text/shape, finish scalebar, start inset ────
     fc.on('mouse:up', (options) => {
       const currentTool = toolRef.current;
-      if (!['text', 'shape', 'scalebar', 'inset'].includes(currentTool)) return;
+
+      // Finish scalebar draw
+      if (currentTool === 'scalebar' && scalebarPhaseRef.current === 'drawing') {
+        // Remove preview line
+        if (scalebarPreviewRef.current) {
+          fc.remove(scalebarPreviewRef.current);
+          scalebarPreviewRef.current = null;
+          fc.renderAll();
+        }
+        const d = scalebarDrawRef.current;
+        if (!d) { setScalebarPhase('idle'); return; }
+        const dx = d.x2 - d.x1;
+        const dy = d.y2 - d.y1;
+        const pixLen = Math.sqrt(dx * dx + dy * dy);
+        if (pixLen < 10) { setScalebarPhase('idle'); return; }
+        setScalebarPhase('dialog');
+        return;
+      }
+
+      if (!['text', 'shape', 'inset'].includes(currentTool)) return;
 
       const target = options.target as (fabric.FabricObject & { storeId?: string }) | null;
-      // scenePoint is the canvas-space coordinate in Fabric v6
-      const pt = (options as unknown as { scenePoint?: fabric.Point; absolutePointer?: fabric.Point }).scenePoint
-              ?? (options as unknown as { absolutePointer?: fabric.Point }).absolutePointer;
+      const pt = scenePoint(options);
       if (!pt) return;
       const cx = Math.round(pt.x);
       const cy = Math.round(pt.y);
 
-      // ── Inset: click on an image to begin crop selection ────────────
+      // ── Inset: click on an image to begin crop selection ─────────────
       if (currentTool === 'inset') {
-        if (insetPhaseRef.current === 'selecting') return; // already selecting
+        if (insetPhaseRef.current === 'selecting') return;
         if (!target?.storeId) return;
         const storeObj = useStore.getState().doc.objects.find(o => o.id === target.storeId);
         if (!storeObj || storeObj.type !== 'image') return;
@@ -173,7 +338,6 @@ export default function CanvasArea() {
         setInsetSourceId(target.storeId);
         setInsetPhase('selecting');
 
-        // Create a resizable crop rect over the image
         const defaultW = storeObj.width * 0.45;
         const defaultH = storeObj.height * 0.45;
         const rect = new fabric.Rect({
@@ -198,9 +362,8 @@ export default function CanvasArea() {
         return;
       }
 
-      // ── Don't place on top of a user-placed store object ───────────────
-      // (connector lines and indicators have no storeId, so they don't block)
-      if (target && (target as fabric.FabricObject & { storeId?: string }).storeId) return;
+      // Don't place on top of a user-placed store object
+      if (target?.storeId) return;
 
       const state = useStore.getState();
 
@@ -223,19 +386,36 @@ export default function CanvasArea() {
           border: { color: '#aa3bff', width: 2, style: 'solid', radius: 4 },
         });
       }
-
-      if (currentTool === 'scalebar') {
-        state.addObject({
-          id: nanoid(), type: 'scalebar',
-          x: cx - 50, y: cy, width: 100, height: 20, rotation: 0,
-          locked: false, visible: true, label: 'Scale Bar',
-          length: 100, realLength: 100,
-          color: '#ffffff', labelColor: '#ffffff', thickness: 4,
-        });
-      }
     });
 
     return () => { fc.dispose(); fabricRef.current = null; };
+  }, []);
+
+  // ── Scale bar dialog confirm ──────────────────────────────────────────
+  const confirmScalebar = useCallback((
+    realLength: number, unit: ScaleUnit,
+    color: string, thickness: number, fontSize: number,
+  ) => {
+    const d = scalebarDrawRef.current;
+    if (!d) { setScalebarPhase('idle'); return; }
+    const dx = d.x2 - d.x1;
+    const dy = d.y2 - d.y1;
+    const pixLen = Math.round(Math.sqrt(dx * dx + dy * dy));
+    const angle  = Math.atan2(dy, dx) * (180 / Math.PI);
+    const cx = Math.round(Math.min(d.x1, d.x2));
+    const cy = Math.round(Math.min(d.y1, d.y2));
+
+    useStore.getState().addObject({
+      id: nanoid(), type: 'scalebar',
+      x: cx, y: cy - thickness / 2,
+      width: pixLen, height: thickness + 20,
+      rotation: angle, locked: false, visible: true,
+      label: `${realLength} ${unit}`,
+      length: pixLen, realLength, unit,
+      color, labelColor: color, thickness, fontSize,
+    });
+    scalebarDrawRef.current = null;
+    setScalebarPhase('idle');
   }, []);
 
   // ── Canvas size & background ──────────────────────────────────────────
@@ -259,18 +439,16 @@ export default function CanvasArea() {
   useEffect(() => {
     const fc = fabricRef.current;
     if (!fc) return;
-    const isDrawTool = ['text', 'shape', 'scalebar', 'inset'].includes(tool);
     if (tool === 'pan') {
       fc.defaultCursor = 'grab';
       fc.selection = false;
-    } else if (isDrawTool) {
-      fc.defaultCursor = tool === 'inset' ? 'crosshair' : 'crosshair';
+    } else if (['text', 'shape', 'scalebar', 'inset'].includes(tool)) {
+      fc.defaultCursor = 'crosshair';
       fc.selection = false;
     } else {
       fc.defaultCursor = 'default';
       fc.selection = true;
     }
-    // Lock selectability of store objects (crop rect stays selectable when selecting)
     fc.getObjects().forEach(fObj => {
       if (fObj === cropRectRef.current) return;
       fObj.selectable = tool === 'select';
@@ -333,7 +511,6 @@ export default function CanvasArea() {
 
     const storeIds = new Set(doc.objects.map(o => o.id));
 
-    // Remove objects deleted from store
     const toRemove: fabric.FabricObject[] = [];
     fc.getObjects().forEach(fObj => {
       const id = (fObj as fabric.FabricObject & { storeId?: string }).storeId;
@@ -344,7 +521,6 @@ export default function CanvasArea() {
       objMapRef.current.delete((o as fabric.FabricObject & { storeId?: string }).storeId!);
     });
 
-    // Add/update
     doc.objects.forEach(obj => {
       const existing = objMapRef.current.get(obj.id) as (fabric.FabricObject & { storeId?: string }) | undefined;
       if (existing) {
@@ -364,7 +540,6 @@ export default function CanvasArea() {
 
     const liveIds = new Set(insets.map(p => p.id));
 
-    // Remove stale connectors
     for (const [pid, conn] of connectorMapRef.current) {
       if (!liveIds.has(pid)) {
         fc.remove(conn.line);
@@ -373,16 +548,13 @@ export default function CanvasArea() {
       }
     }
 
-    // Add/update connectors
     for (const pair of insets) {
       const parent = doc.objects.find(o => o.id === pair.parentObjectId);
       const inset  = doc.objects.find(o => o.id === pair.insetObjectId);
       if (!parent || !inset) continue;
 
-      // Source = center of crop rect indicator on parent
       const srcX = parent.x + pair.cropRect.relX + pair.cropRect.w / 2;
       const srcY = parent.y + pair.cropRect.relY + pair.cropRect.h / 2;
-      // Target = center of inset image
       const tgtX = inset.x + inset.width  / 2;
       const tgtY = inset.y + inset.height / 2;
 
@@ -473,7 +645,6 @@ export default function CanvasArea() {
     const srcImg = group?.images.find(i => i.id === parentObj.imageId);
     if (!srcImg) return;
 
-    // Crop rect bounds in canvas pixels, relative to parent's top-left
     const crLeft = cropRect.left ?? 0;
     const crTop  = cropRect.top  ?? 0;
     const crW    = (cropRect.width  ?? 100) * (cropRect.scaleX ?? 1);
@@ -482,7 +653,6 @@ export default function CanvasArea() {
     const relX = crLeft - parentObj.x;
     const relY = crTop  - parentObj.y;
 
-    // Map to original image pixel space
     const scaleX = srcImg.width  / parentObj.width;
     const scaleY = srcImg.height / parentObj.height;
 
@@ -493,7 +663,6 @@ export default function CanvasArea() {
 
     const croppedUrl = await cropDataUrl(srcImg.dataUrl, cropSx, cropSy, cropSw, cropSh);
 
-    // Add cropped image to the group library
     const newImg: ThinSectionImage = {
       id: nanoid(),
       mode: parentObj.mode,
@@ -504,7 +673,6 @@ export default function CanvasArea() {
     };
     addImageToGroup(parentObj.groupId, newImg);
 
-    // Place inset on canvas (to the right/below parent)
     const insetW = Math.min(parentObj.width * 0.65, 220);
     const insetH = insetW * (cropSh / cropSw);
     const insetObj: ImageObject = {
@@ -523,7 +691,6 @@ export default function CanvasArea() {
     };
     addObject(insetObj);
 
-    // Register inset pair for connector line rendering
     const pair: InsetPair = {
       id: nanoid(),
       parentObjectId: parentObj.id,
@@ -532,7 +699,6 @@ export default function CanvasArea() {
     };
     addInset(pair);
 
-    // Clean up crop rect
     fc.remove(cropRect);
     cropRectRef.current = null;
     setInsetPhase('idle');
@@ -569,6 +735,44 @@ export default function CanvasArea() {
         }}>
           <span style={{ fontSize: 14, color: 'var(--accent)', fontWeight: 600 }}>Drop image here</span>
         </div>
+      )}
+
+      {/* Scalebar draw hint */}
+      {tool === 'scalebar' && scalebarPhase === 'idle' && (
+        <div style={{
+          position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
+          background: 'var(--bg-overlay)', border: '1px solid var(--border)',
+          borderRadius: 8, padding: '7px 14px', zIndex: 20, pointerEvents: 'none',
+        }}>
+          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            Click and drag to draw the scale bar line
+          </span>
+        </div>
+      )}
+
+      {/* Scalebar drawing feedback */}
+      {scalebarPhase === 'drawing' && (
+        <div style={{
+          position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
+          background: 'var(--bg-overlay)', border: '1px solid var(--warning)',
+          borderRadius: 8, padding: '7px 14px', zIndex: 20, pointerEvents: 'none',
+        }}>
+          <span style={{ fontSize: 12, color: 'var(--warning)' }}>
+            Release to set end point…
+          </span>
+        </div>
+      )}
+
+      {/* Scale bar size dialog */}
+      {scalebarPhase === 'dialog' && scalebarDrawRef.current && (
+        <ScaleBarDialog
+          pixelLength={Math.round(Math.hypot(
+            scalebarDrawRef.current.x2 - scalebarDrawRef.current.x1,
+            scalebarDrawRef.current.y2 - scalebarDrawRef.current.y1,
+          ))}
+          onConfirm={confirmScalebar}
+          onCancel={() => { scalebarDrawRef.current = null; setScalebarPhase('idle'); }}
+        />
       )}
 
       {/* Inset confirmation toolbar */}
@@ -658,20 +862,56 @@ function createFabricObject(
     return;
   }
 
-  let fObj: fabric.FabricObject | null = null;
-
   if (obj.type === 'text') {
     const o = obj as TextObject;
-    let display = o.content;
-    if (o.isLatex) display = o.content.replace(/\\text\{([^}]*)\}/g, '$1');
-    fObj = new fabric.Textbox(display, {
+    if (o.isLatex) {
+      // Render LaTeX asynchronously, then place as image
+      renderLatexToDataUrl(o.content, o.fontSize, o.color).then(({ dataUrl, width }) => {
+        if (!dataUrl) {
+          // Fallback to plain textbox on failure
+          const tb = new fabric.Textbox(o.content, {
+            left: o.x, top: o.y, width: o.width,
+            fontSize: o.fontSize, fill: o.color,
+            fontWeight: o.fontWeight, textAlign: o.align,
+            angle: o.rotation,
+            fontFamily: 'Inter, system-ui, sans-serif',
+          });
+          (tb as typeof tb & { storeId: string }).storeId = obj.id;
+          (tb as typeof tb & { _isLatexImg: boolean })._isLatexImg = false;
+          fc.add(tb);
+          map.set(obj.id, tb);
+          fc.renderAll();
+          return;
+        }
+        fabric.FabricImage.fromURL(dataUrl).then((fImg) => {
+          fImg.set({
+            left: o.x, top: o.y, angle: o.rotation,
+            scaleX: o.width / width,
+            scaleY: (o.width / width),
+          });
+          (fImg as typeof fImg & { storeId: string }).storeId = obj.id;
+          (fImg as typeof fImg & { _isLatexImg: boolean })._isLatexImg = true;
+          fc.add(fImg);
+          map.set(obj.id, fImg);
+          fc.renderAll();
+        });
+      });
+      return;
+    }
+    const tb = new fabric.Textbox(o.content, {
       left: o.x, top: o.y, width: o.width,
       fontSize: o.fontSize, fill: o.color,
       fontWeight: o.fontWeight, textAlign: o.align,
       angle: o.rotation,
       fontFamily: 'Inter, system-ui, sans-serif',
     });
+    (tb as typeof tb & { storeId: string }).storeId = obj.id;
+    fc.add(tb);
+    map.set(obj.id, tb);
+    return;
   }
+
+  let fObj: fabric.FabricObject | null = null;
 
   if (obj.type === 'shape') {
     const o = obj as ShapeObject;
@@ -693,15 +933,59 @@ function createFabricObject(
 
   if (obj.type === 'scalebar') {
     const o = obj as ScaleBarObject;
+    // Build scalebar group: line + LaTeX label
     const bar = new fabric.Rect({
-      left: 0, top: 0, width: o.length, height: o.thickness, fill: o.color,
+      left: 0, top: 0,
+      width: o.length, height: o.thickness,
+      fill: o.color, stroke: '', strokeWidth: 0,
     });
-    const lbl = new fabric.FabricText(`${o.realLength} µm`, {
-      left: o.length / 2, top: o.thickness + 4,
-      fontSize: 12, fill: o.labelColor, originX: 'center',
-      fontFamily: 'Inter, system-ui, sans-serif',
+    // Left cap
+    const capL = new fabric.Rect({
+      left: 0, top: -4,
+      width: o.thickness, height: o.thickness + 8,
+      fill: o.color, stroke: '', strokeWidth: 0,
     });
-    fObj = new fabric.Group([bar, lbl], { left: o.x, top: o.y, angle: o.rotation });
+    // Right cap
+    const capR = new fabric.Rect({
+      left: o.length - o.thickness, top: -4,
+      width: o.thickness, height: o.thickness + 8,
+      fill: o.color, stroke: '', strokeWidth: 0,
+    });
+
+    const labelLatex = `\\text{${o.realLength}\\,${o.unit}}`;
+    const grp = new fabric.Group([bar, capL, capR], {
+      left: o.x, top: o.y, angle: o.rotation,
+      originX: 'left', originY: 'top',
+    });
+
+    (grp as typeof grp & { storeId: string }).storeId = obj.id;
+    fc.add(grp);
+    map.set(obj.id, grp);
+
+    // Render label as LaTeX image and add below bar
+    renderLatexToDataUrl(labelLatex, o.fontSize ?? 13, o.labelColor).then(({ dataUrl, width, height: _lh }) => {
+      if (!dataUrl || !fc.getObjects().includes(grp)) return;
+      fabric.FabricImage.fromURL(dataUrl).then((lbl) => {
+        const scale = Math.min(1, o.length / width);
+        lbl.set({
+          left: o.x + o.length / 2,
+          top:  o.y + o.thickness + 6,
+          originX: 'center',
+          originY: 'top',
+          angle: o.rotation,
+          scaleX: scale,
+          scaleY: scale,
+          selectable: false,
+          evented: false,
+        });
+        (lbl as typeof lbl & { _scalebarLabel: string })._scalebarLabel = obj.id;
+        fc.add(lbl);
+        fc.renderAll();
+      });
+    });
+
+    fc.renderAll();
+    return;
   }
 
   if (fObj) {
@@ -730,11 +1014,14 @@ function syncFabricProps(
     }
   }
 
-  if (obj.type === 'text' && fObj instanceof fabric.Textbox) {
+  if (obj.type === 'text') {
     const o = obj as TextObject;
-    let display = o.content;
-    if (o.isLatex) display = o.content.replace(/\\text\{([^}]*)\}/g, '$1');
-    fObj.set({ text: display, fontSize: o.fontSize, fill: o.color, fontWeight: o.fontWeight, textAlign: o.align, width: o.width });
+    // For LaTeX images, don't sync text content — re-creation handles it
+    if (fObj instanceof fabric.Textbox) {
+      let display = o.content;
+      if (o.isLatex) display = o.content.replace(/\\text\{([^}]*)\}/g, '$1').replace(/\\\w+\{([^}]*)\}/g, '$1');
+      fObj.set({ text: display, fontSize: o.fontSize, fill: o.color, fontWeight: o.fontWeight, textAlign: o.align, width: o.width });
+    }
   }
 
   if (obj.type === 'shape') {

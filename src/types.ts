@@ -84,13 +84,17 @@ export interface ShapeObject extends CanvasObjectBase {
   border: BorderStyle;
 }
 
+export type ScaleUnit = 'µm' | 'nm' | 'mm' | 'cm' | 'm' | 'km' | 'Å';
+
 export interface ScaleBarObject extends CanvasObjectBase {
   type: 'scalebar';
-  length: number;
-  realLength: number;
+  length: number;       // pixel length on canvas
+  realLength: number;   // real-world measurement value
+  unit: ScaleUnit;
   color: string;
   labelColor: string;
   thickness: number;
+  fontSize: number;
 }
 
 export type CanvasObject = ImageObject | TextObject | ShapeObject | ScaleBarObject;

@@ -11,6 +11,7 @@ import type {
   CanvasObject, ImageObject, TextObject, ShapeObject, ScaleBarObject,
   BorderStyle, ImageAdjustments,
 } from '../types';
+// ScaleUnit referenced via ScaleBarObject['unit'] below
 import { DEFAULT_ADJUSTMENTS } from '../types';
 import { BORDER_COLORS as COLORS } from '../utils';
 
@@ -395,20 +396,29 @@ function ShapePanel({ obj, update }: { obj: ShapeObject; update: (p: Partial<Sha
 }
 
 // ── Scale bar panel ───────────────────────────────────────────────────────
+const SCALE_UNITS_SIDEBAR = ['µm', 'nm', 'mm', 'cm', 'm', 'km', 'Å'] as const;
+
 function ScaleBarPanel({ obj, update }: { obj: ScaleBarObject; update: (p: Partial<ScaleBarObject>) => void }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
       <div style={{ display: 'flex', gap: 6 }}>
-        <div style={{ flex: 1 }}>
-          <div className="input-label">Canvas length (px)</div>
-          <input className="input" type="number" value={obj.length}
-            onChange={e => update({ length: +e.target.value || 100 })} />
-        </div>
-        <div style={{ flex: 1 }}>
-          <div className="input-label">Real length (µm)</div>
+        <div style={{ flex: 2 }}>
+          <div className="input-label">Real length</div>
           <input className="input" type="number" value={obj.realLength}
-            onChange={e => update({ realLength: +e.target.value || 100 })} />
+            onChange={e => update({ realLength: +e.target.value || 1, label: `${+e.target.value || 1} ${obj.unit ?? 'µm'}` })} />
         </div>
+        <div style={{ flex: 1 }}>
+          <div className="input-label">Unit</div>
+          <select className="select" value={obj.unit ?? 'µm'}
+            onChange={e => update({ unit: e.target.value as ScaleBarObject['unit'], label: `${obj.realLength} ${e.target.value}` })}>
+            {SCALE_UNITS_SIDEBAR.map(u => <option key={u} value={u}>{u}</option>)}
+          </select>
+        </div>
+      </div>
+      <div>
+        <div className="input-label">Canvas length (px)</div>
+        <input className="input" type="number" value={obj.length}
+          onChange={e => update({ length: +e.target.value || 100 })} />
       </div>
       <div>
         <div className="input-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -419,19 +429,19 @@ function ScaleBarPanel({ obj, update }: { obj: ScaleBarObject; update: (p: Parti
           onChange={e => update({ thickness: +e.target.value })} style={{ width: '100%' }} />
       </div>
       <div>
-        <div className="input-label">Bar color</div>
-        <div className="input-row">
-          <input type="color" value={obj.color} onChange={e => update({ color: e.target.value })}
-            style={{ width: 28, height: 24, border: '1px solid var(--border)', borderRadius: 4, padding: 1, background: 'none', cursor: 'pointer' }} />
-          <input className="input" value={obj.color} onChange={e => update({ color: e.target.value })} />
+        <div className="input-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <span>Label font size</span>
+          <span style={{ color: 'var(--text-primary)' }}>{obj.fontSize ?? 13}px</span>
         </div>
+        <input type="range" min={8} max={32} value={obj.fontSize ?? 13}
+          onChange={e => update({ fontSize: +e.target.value })} style={{ width: '100%' }} />
       </div>
       <div>
-        <div className="input-label">Label color</div>
+        <div className="input-label">Color</div>
         <div className="input-row">
-          <input type="color" value={obj.labelColor} onChange={e => update({ labelColor: e.target.value })}
+          <input type="color" value={obj.color} onChange={e => update({ color: e.target.value, labelColor: e.target.value })}
             style={{ width: 28, height: 24, border: '1px solid var(--border)', borderRadius: 4, padding: 1, background: 'none', cursor: 'pointer' }} />
-          <input className="input" value={obj.labelColor} onChange={e => update({ labelColor: e.target.value })} />
+          <input className="input" value={obj.color} onChange={e => update({ color: e.target.value, labelColor: e.target.value })} />
         </div>
       </div>
     </div>
