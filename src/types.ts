@@ -36,6 +36,24 @@ export interface CanvasObjectBase {
   label: string;
 }
 
+export interface ImageAdjustments {
+  flipX: boolean;
+  flipY: boolean;
+  brightness: number;   // -1 to 1
+  contrast: number;     // -1 to 1
+  saturation: number;   // -1 to 1
+  hue: number;          // -1 to 1 (hue rotation)
+  grayscale: boolean;
+  invert: boolean;
+  sharpen: boolean;
+}
+
+export const DEFAULT_ADJUSTMENTS: ImageAdjustments = {
+  flipX: false, flipY: false,
+  brightness: 0, contrast: 0, saturation: 0, hue: 0,
+  grayscale: false, invert: false, sharpen: false,
+};
+
 export interface ImageObject extends CanvasObjectBase {
   type: 'image';
   imageId: string;
@@ -45,11 +63,12 @@ export interface ImageObject extends CanvasObjectBase {
   showModeTag: boolean;
   tagPosition: 'tl' | 'tr' | 'bl' | 'br';
   opacity: number;
+  adjustments: ImageAdjustments;
 }
 
 export interface TextObject extends CanvasObjectBase {
   type: 'text';
-  content: string;         // raw LaTeX string (\text{...} or math)
+  content: string;
   isLatex: boolean;
   fontSize: number;
   color: string;
@@ -59,7 +78,7 @@ export interface TextObject extends CanvasObjectBase {
 
 export interface ShapeObject extends CanvasObjectBase {
   type: 'shape';
-  shape: 'rect' | 'ellipse' | 'line';
+  shape: 'rect' | 'ellipse';
   fill: string;
   fillOpacity: number;
   border: BorderStyle;
@@ -67,14 +86,22 @@ export interface ShapeObject extends CanvasObjectBase {
 
 export interface ScaleBarObject extends CanvasObjectBase {
   type: 'scalebar';
-  length: number;       // px on canvas
-  realLength: number;   // µm
+  length: number;
+  realLength: number;
   color: string;
   labelColor: string;
   thickness: number;
 }
 
 export type CanvasObject = ImageObject | TextObject | ShapeObject | ScaleBarObject;
+
+export interface InsetPair {
+  id: string;
+  parentObjectId: string;
+  insetObjectId: string;
+  /** crop rect position relative to parent object's top-left, in canvas pixels */
+  cropRect: { relX: number; relY: number; w: number; h: number };
+}
 
 export interface CanvasDoc {
   id: string;
@@ -96,4 +123,4 @@ export interface DocumentMetadata {
   date: string;
 }
 
-export type Tool = 'select' | 'text' | 'shape' | 'scalebar' | 'pan';
+export type Tool = 'select' | 'text' | 'shape' | 'scalebar' | 'pan' | 'inset';

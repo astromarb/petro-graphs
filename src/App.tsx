@@ -9,7 +9,7 @@ import { useStore } from './store';
 import type { Tool } from './types';
 
 const KEY_TOOL_MAP: Record<string, Tool> = {
-  v: 'select', h: 'pan', t: 'text', s: 'shape', b: 'scalebar',
+  v: 'select', h: 'pan', t: 'text', s: 'shape', b: 'scalebar', i: 'inset',
 };
 
 export default function App() {

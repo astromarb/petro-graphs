@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import type {
-  CanvasDoc, CanvasObject, ImageGroup, ThinSectionImage, Tool,
+  CanvasDoc, CanvasObject, ImageGroup, ThinSectionImage, Tool, InsetPair,
 } from './types';
 
 export interface AppState {
@@ -25,6 +25,11 @@ export interface AppState {
   removeObject: (id: string) => void;
   reorderObjects: (ids: string[]) => void;
   duplicateObject: (id: string) => void;
+
+  // Inset pairs
+  insets: InsetPair[];
+  addInset: (pair: InsetPair) => void;
+  removeInset: (id: string) => void;
 
   // Selection
   selectedId: string | null;
@@ -71,21 +76,21 @@ export const useStore = create<AppState>()(
     groups: [],
     addGroup: (group) => set((s) => { s.groups.push(group); }),
     updateGroup: (id, patch) => set((s) => {
-      const g = s.groups.find(g => g.id === id);
-      if (g) Object.assign(g, patch);
+      const idx = s.groups.findIndex(g => g.id === id);
+      if (idx !== -1) Object.assign(s.groups[idx], patch);
     }),
     removeGroup: (id) => set((s) => { s.groups = s.groups.filter(g => g.id !== id); }),
     toggleGroupExpanded: (id) => set((s) => {
-      const g = s.groups.find(g => g.id === id);
-      if (g) g.expanded = !g.expanded;
+      const idx = s.groups.findIndex(g => g.id === id);
+      if (idx !== -1) s.groups[idx].expanded = !s.groups[idx].expanded;
     }),
     addImageToGroup: (groupId, image) => set((s) => {
-      const g = s.groups.find(g => g.id === groupId);
-      if (g) g.images.push(image);
+      const idx = s.groups.findIndex(g => g.id === groupId);
+      if (idx !== -1) s.groups[idx].images.push(image);
     }),
     removeImageFromGroup: (groupId, imageId) => set((s) => {
-      const g = s.groups.find(g => g.id === groupId);
-      if (g) g.images = g.images.filter(i => i.id !== imageId);
+      const idx = s.groups.findIndex(g => g.id === groupId);
+      if (idx !== -1) s.groups[idx].images = s.groups[idx].images.filter(i => i.id !== imageId);
     }),
 
     doc: defaultDoc,
@@ -111,6 +116,10 @@ export const useStore = create<AppState>()(
       clone.label = clone.label + ' (copy)';
       s.doc.objects.push(clone);
     }),
+
+    insets: [],
+    addInset: (pair) => set((s) => { s.insets.push(pair); }),
+    removeInset: (id) => set((s) => { s.insets = s.insets.filter(p => p.id !== id); }),
 
     selectedId: null,
     setSelectedId: (id) => set((s) => { s.selectedId = id; }),

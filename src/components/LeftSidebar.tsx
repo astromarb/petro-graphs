@@ -1,5 +1,5 @@
-import React, { useRef, useState, useCallback } from 'react';
-import { Plus, FolderOpen, ChevronDown, ChevronRight, X, Trash2, Upload } from 'lucide-react';
+import React, { useRef, useState, useCallback, useEffect } from 'react';
+import { Plus, FolderOpen, ChevronDown, ChevronRight, X, Trash2, Upload, FileImage } from 'lucide-react';
 import { useStore } from '../store';
 import type { ImageGroup, ThinSectionImage, ImageMode } from '../types';
 import { nanoid } from '../utils';
@@ -21,10 +21,32 @@ function readFileAsDataUrl(file: File): Promise<{ dataUrl: string; w: number; h:
 
 function detectMode(filename: string): ImageMode {
   const lower = filename.toLowerCase();
-  if (lower.includes('xpl') || lower.includes('cross') || lower.includes('cx')) return 'XPL';
+  if (lower.includes('xpl') || lower.includes('cross') || lower.includes('cx') || lower.includes('pol')) return 'XPL';
   return 'PPL';
 }
 
+// ── Page size presets ─────────────────────────────────────────────────────
+interface PagePreset { label: string; w: number; h: number; dpi: number }
+const PAGE_PRESETS: PagePreset[] = [
+  // Journal single-column (89 mm @ 300 dpi)
+  { label: 'Nature / Science — 1 col (89 mm)',  w: 1051, h:  788, dpi: 300 },
+  // Journal double-column (183 mm @ 300 dpi)
+  { label: 'Nature / Science — 2 col (183 mm)', w: 2165, h: 1624, dpi: 300 },
+  // EPSL / GSA full width (190 mm @ 300 dpi)
+  { label: 'EPSL / GSA — full (190 mm)',         w: 2244, h: 1683, dpi: 300 },
+  // A4 portrait @ 300 dpi
+  { label: 'A4 portrait (210 × 297 mm)',         w: 2480, h: 3508, dpi: 300 },
+  // A4 landscape
+  { label: 'A4 landscape (297 × 210 mm)',        w: 3508, h: 2480, dpi: 300 },
+  // US Letter
+  { label: 'US Letter (8.5 × 11 in)',            w: 2550, h: 3300, dpi: 300 },
+  // 4K screen
+  { label: '4K screen (3840 × 2160)',            w: 3840, h: 2160, dpi: 96  },
+  // Presentation slide
+  { label: 'Presentation (1920 × 1080)',         w: 1920, h: 1080, dpi: 96  },
+];
+
+// ── Image card in group ───────────────────────────────────────────────────
 function ImageCard({ img, groupId }: { img: ThinSectionImage; groupId: string }) {
   const { removeImageFromGroup } = useStore();
 
@@ -47,41 +69,54 @@ function ImageCard({ img, groupId }: { img: ThinSectionImage; groupId: string })
         </div>
         <button
           className="btn-icon"
-          style={{ position: 'absolute', top: 2, right: 2, padding: 2, background: 'rgba(0,0,0,0.5)' }}
+          style={{ position: 'absolute', top: 2, right: 2, padding: 2, background: 'rgba(0,0,0,0.6)' }}
           onClick={() => removeImageFromGroup(groupId, img.id)}
-          title="Remove image"
+          title="Remove"
         >
           <X size={10} />
         </button>
       </div>
-      <div style={{ padding: '4px 6px', fontSize: 10, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      <div style={{ padding: '3px 6px', fontSize: 10, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {img.name}
       </div>
     </div>
   );
 }
 
+// ── Group card ────────────────────────────────────────────────────────────
 function GroupCard({ group }: { group: ImageGroup }) {
   const { toggleGroupExpanded, updateGroup, removeGroup, addImageToGroup } = useStore();
   const fileRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
   const [editName, setEditName] = useState(false);
-  const [nameVal, setNameVal] = useState(group.name);
+  const [nameVal, setNameVal]   = useState(group.name);
+
+  // Keep nameVal in sync when group.name changes externally (e.g., from another render)
+  useEffect(() => {
+    if (!editName) setNameVal(group.name);
+  }, [group.name, editName]);
+
+  const saveName = () => {
+    const trimmed = nameVal.trim();
+    if (trimmed && trimmed !== group.name) {
+      updateGroup(group.id, { name: trimmed });
+    } else {
+      setNameVal(group.name); // revert if empty or unchanged
+    }
+    setEditName(false);
+  };
 
   const processFiles = useCallback(async (files: FileList | File[]) => {
-    const arr = Array.from(files).filter(f => f.type.startsWith('image/'));
-    for (const file of arr) {
+    for (const file of Array.from(files)) {
+      if (!file.type.startsWith('image/')) continue;
       try {
         const { dataUrl, w, h } = await readFileAsDataUrl(file);
-        const img: ThinSectionImage = {
+        addImageToGroup(group.id, {
           id: nanoid(),
           mode: detectMode(file.name),
           name: file.name,
-          dataUrl,
-          width: w,
-          height: h,
-        };
-        addImageToGroup(group.id, img);
+          dataUrl, width: w, height: h,
+        });
       } catch { /* skip bad files */ }
     }
   }, [group.id, addImageToGroup]);
@@ -92,43 +127,69 @@ function GroupCard({ group }: { group: ImageGroup }) {
     if (e.dataTransfer.files.length) processFiles(e.dataTransfer.files);
   }, [processFiles]);
 
-  const pplImages = group.images.filter(i => i.mode === 'PPL');
-  const xplImages = group.images.filter(i => i.mode === 'XPL');
+  const ppl = group.images.filter(i => i.mode === 'PPL');
+  const xpl = group.images.filter(i => i.mode === 'XPL');
 
   return (
     <div className={`group-card${group.expanded ? ' expanded' : ''}`}>
-      <div className="group-header" onClick={() => toggleGroupExpanded(group.id)}>
+      {/* Header */}
+      <div
+        className="group-header"
+        onClick={e => {
+          // Don't toggle if clicking the delete button or the rename input
+          if ((e.target as HTMLElement).closest('button, input')) return;
+          toggleGroupExpanded(group.id);
+        }}
+      >
         <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>
           {group.expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         </span>
+
         {editName ? (
           <input
             className="input"
-            style={{ flex: 1, fontSize: 11 }}
+            style={{ flex: 1, fontSize: 11, padding: '3px 6px' }}
             value={nameVal}
-            onClick={e => e.stopPropagation()}
             onChange={e => setNameVal(e.target.value)}
-            onBlur={() => { updateGroup(group.id, { name: nameVal || group.name }); setEditName(false); }}
-            onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Escape') { updateGroup(group.id, { name: nameVal || group.name }); setEditName(false); } }}
+            onBlur={saveName}
+            onKeyDown={e => {
+              e.stopPropagation();
+              if (e.key === 'Enter')  saveName();
+              if (e.key === 'Escape') { setNameVal(group.name); setEditName(false); }
+            }}
+            onClick={e => e.stopPropagation()}
             autoFocus
           />
         ) : (
           <span
-            style={{ flex: 1, fontSize: 12, fontWeight: 500, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+            style={{
+              flex: 1, fontSize: 12, fontWeight: 500, color: 'var(--text-primary)',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              cursor: 'text',
+            }}
             onDoubleClick={e => { e.stopPropagation(); setEditName(true); }}
+            title="Double-click to rename"
           >
             {group.name}
           </span>
         )}
-        <span style={{ fontSize: 10, color: 'var(--text-muted)', flexShrink: 0 }}>{group.images.length}</span>
-        <button className="btn-icon" style={{ padding: 2 }} onClick={e => { e.stopPropagation(); removeGroup(group.id); }} title="Delete group">
+
+        <span style={{ fontSize: 10, color: 'var(--text-muted)', flexShrink: 0 }}>
+          {group.images.length}
+        </span>
+        <button
+          className="btn-icon"
+          style={{ padding: 2 }}
+          onClick={e => { e.stopPropagation(); removeGroup(group.id); }}
+          title="Delete group"
+        >
           <Trash2 size={11} />
         </button>
       </div>
 
+      {/* Body */}
       {group.expanded && (
-        <div style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {/* Sample label */}
+        <div style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 7 }}>
           <input
             className="input"
             placeholder="Sample ID / label"
@@ -137,44 +198,45 @@ function GroupCard({ group }: { group: ImageGroup }) {
             style={{ fontSize: 11 }}
           />
 
-          {/* Drop zone */}
           <div
             className={`drop-zone${dragOver ? ' drag-over' : ''}`}
-            style={{ padding: '10px 8px' }}
+            style={{ padding: '9px 8px' }}
             onDragOver={e => { e.preventDefault(); setDragOver(true); }}
             onDragLeave={() => setDragOver(false)}
             onDrop={onDrop}
             onClick={() => fileRef.current?.click()}
           >
-            <Upload size={14} style={{ margin: '0 auto 4px', display: 'block' }} />
-            <div style={{ fontSize: 11 }}>Drop images or click to upload</div>
-            <div style={{ fontSize: 10, marginTop: 2, color: 'var(--text-muted)' }}>PPL / XPL — auto-detected by filename</div>
+            <Upload size={13} style={{ margin: '0 auto 3px', display: 'block' }} />
+            <div style={{ fontSize: 11 }}>Drop or click to upload</div>
+            <div style={{ fontSize: 10, marginTop: 1, color: 'var(--text-muted)' }}>
+              PPL/XPL auto-detected from filename
+            </div>
           </div>
-          <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: 'none' }}
-            onChange={e => e.target.files && processFiles(e.target.files)} />
+          <input
+            ref={fileRef} type="file" accept="image/*" multiple style={{ display: 'none' }}
+            onChange={e => e.target.files && processFiles(e.target.files)}
+          />
 
-          {/* PPL row */}
-          {pplImages.length > 0 && (
+          {ppl.length > 0 && (
             <div>
-              <div className="panel-label" style={{ marginBottom: 5 }}>PPL</div>
+              <div className="panel-label" style={{ marginBottom: 4 }}>PPL</div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 5 }}>
-                {pplImages.map(img => <ImageCard key={img.id} img={img} groupId={group.id} />)}
+                {ppl.map(img => <ImageCard key={img.id} img={img} groupId={group.id} />)}
               </div>
             </div>
           )}
 
-          {/* XPL row */}
-          {xplImages.length > 0 && (
+          {xpl.length > 0 && (
             <div>
-              <div className="panel-label" style={{ marginBottom: 5 }}>XPL</div>
+              <div className="panel-label" style={{ marginBottom: 4 }}>XPL</div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 5 }}>
-                {xplImages.map(img => <ImageCard key={img.id} img={img} groupId={group.id} />)}
+                {xpl.map(img => <ImageCard key={img.id} img={img} groupId={group.id} />)}
               </div>
             </div>
           )}
 
           {group.images.length === 0 && (
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', padding: '6px 0' }}>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', padding: '4px 0' }}>
               No images yet
             </div>
           )}
@@ -184,81 +246,101 @@ function GroupCard({ group }: { group: ImageGroup }) {
   );
 }
 
+// ── Left sidebar ──────────────────────────────────────────────────────────
 export default function LeftSidebar() {
   const { groups, addGroup, doc, setDocMeta } = useStore();
   const [canvasW, setCanvasW] = useState(String(doc.width));
   const [canvasH, setCanvasH] = useState(String(doc.height));
 
-  const createGroup = () => {
-    const g: ImageGroup = {
-      id: nanoid(),
-      name: `Group ${groups.length + 1}`,
-      sample: '',
-      images: [],
-      expanded: true,
-    };
-    addGroup(g);
-  };
-
-  const applyCanvasSize = () => {
+  const applySize = () => {
     const w = parseInt(canvasW);
     const h = parseInt(canvasH);
     if (w > 0 && h > 0) setDocMeta({ width: w, height: h });
   };
 
-  const PRESETS = [
-    { label: '1-col (3.5×2.5 in)', w: 1050, h: 750 },
-    { label: '2-col (7×5 in)', w: 2100, h: 1500 },
-    { label: 'Full page (7×9 in)', w: 2100, h: 2700 },
-    { label: '4K (3840×2160)', w: 3840, h: 2160 },
-  ];
+  const applyPreset = (p: PagePreset) => {
+    setCanvasW(String(p.w));
+    setCanvasH(String(p.h));
+    setDocMeta({ width: p.w, height: p.h, dpi: p.dpi });
+  };
+
+  const createGroup = () => {
+    addGroup({
+      id: nanoid(),
+      name: `Group ${groups.length + 1}`,
+      sample: '',
+      images: [],
+      expanded: true,
+    });
+  };
 
   return (
     <div className="sidebar sidebar-left">
       {/* Canvas size */}
       <div className="panel-section">
         <div className="panel-label"><FolderOpen size={11} /> Canvas</div>
+
         <div style={{ display: 'flex', gap: 5, marginBottom: 6 }}>
           <div style={{ flex: 1 }}>
             <div className="input-label">W (px)</div>
-            <input className="input" value={canvasW} onChange={e => setCanvasW(e.target.value)} />
+            <input className="input" value={canvasW} onChange={e => setCanvasW(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && applySize()} />
           </div>
           <div style={{ flex: 1 }}>
             <div className="input-label">H (px)</div>
-            <input className="input" value={canvasH} onChange={e => setCanvasH(e.target.value)} />
+            <input className="input" value={canvasH} onChange={e => setCanvasH(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && applySize()} />
           </div>
         </div>
-        <select className="select" style={{ marginBottom: 6, fontSize: 11 }}
-          onChange={e => {
-            const p = PRESETS[parseInt(e.target.value)];
-            if (p) { setCanvasW(String(p.w)); setCanvasH(String(p.h)); }
-          }}
+
+        {/* Page presets */}
+        <div className="input-label">Page preset</div>
+        <select
+          className="select"
+          style={{ marginBottom: 6, fontSize: 11 }}
           defaultValue=""
+          onChange={e => {
+            const idx = parseInt(e.target.value);
+            if (!isNaN(idx)) applyPreset(PAGE_PRESETS[idx]);
+            e.target.value = '';
+          }}
         >
-          <option value="" disabled>Preset sizes…</option>
-          {PRESETS.map((p, i) => <option key={i} value={i}>{p.label}</option>)}
+          <option value="" disabled>Choose a preset…</option>
+          {PAGE_PRESETS.map((p, i) => (
+            <option key={i} value={i}>{p.label}</option>
+          ))}
         </select>
-        <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
-          <button className="btn btn-ghost" style={{ flex: 1, fontSize: 11 }} onClick={applyCanvasSize}>Apply</button>
+
+        <div style={{ display: 'flex', gap: 5, alignItems: 'flex-end' }}>
+          <button className="btn btn-ghost" style={{ flex: 1, fontSize: 11 }} onClick={applySize}>
+            Apply size
+          </button>
           <div style={{ flex: 1 }}>
             <div className="input-label">DPI</div>
-            <input className="input" value={doc.dpi} onChange={e => setDocMeta({ dpi: parseInt(e.target.value) || 300 })} />
+            <input className="input" type="number" value={doc.dpi}
+              onChange={e => setDocMeta({ dpi: parseInt(e.target.value) || 300 })} />
           </div>
         </div>
+
         <div style={{ marginTop: 8 }}>
           <div className="input-label">Background</div>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <input type="color" value={doc.background}
+            <input
+              type="color" value={doc.background}
               onChange={e => setDocMeta({ background: e.target.value })}
-              style={{ width: 32, height: 26, border: '1px solid var(--border)', borderRadius: 4, padding: 1, background: 'none', cursor: 'pointer' }} />
-            <input className="input" value={doc.background} onChange={e => setDocMeta({ background: e.target.value })} />
+              style={{ width: 30, height: 26, border: '1px solid var(--border)', borderRadius: 4, padding: 1, background: 'none', cursor: 'pointer' }}
+            />
+            <input className="input" value={doc.background}
+              onChange={e => setDocMeta({ background: e.target.value })} />
           </div>
         </div>
       </div>
 
-      {/* Image groups */}
-      <div className="panel-section" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 10 }}>
-        <div className="panel-label" style={{ margin: 0 }}>Image Library</div>
+      {/* Image groups header */}
+      <div className="panel-section" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div className="panel-label" style={{ margin: 0 }}>
+          <FileImage size={11} /> Image Library
+        </div>
         <button className="btn btn-primary" style={{ padding: '4px 9px', fontSize: 11 }} onClick={createGroup}>
           <Plus size={11} /> New Group
         </button>
@@ -266,7 +348,7 @@ export default function LeftSidebar() {
 
       <div className="scroll-area" style={{ padding: '8px 10px' }}>
         {groups.length === 0 && (
-          <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--text-muted)', fontSize: 11 }}>
+          <div style={{ textAlign: 'center', padding: '20px 0', color: 'var(--text-muted)', fontSize: 11 }}>
             <p style={{ margin: 0 }}>No image groups yet.</p>
             <p style={{ margin: '4px 0 0' }}>Click <strong>New Group</strong> to start.</p>
           </div>
