@@ -6,8 +6,8 @@ import type {
   BorderStyle, InsetPair, ThinSectionImage, ImageAdjustments, ScaleUnit,
 } from '../types';
 import { DEFAULT_ADJUSTMENTS } from '../types';
-import { nanoid, niceScaleBar } from '../utils';
-import { renderLatexToDataUrl } from '../latexRenderer';
+import { nanoid, niceScaleBar, UNIT_METERS } from '../utils';
+import { renderLatexToFabricImage } from '../latexRenderer';
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -74,111 +74,7 @@ function getScenePt(fc: fabric.Canvas, options: fabric.TEvent): fabric.Point | n
   return o.scenePoint ?? o.absolutePointer ?? null;
 }
 
-const SCALE_UNITS: ScaleUnit[] = ['µm', 'nm', 'mm', 'cm', 'm', 'km', 'Å'];
 
-// ── Scale bar input dialog ────────────────────────────────────────────────
-
-interface ScaleDialogProps {
-  pixelLength: number;
-  onConfirm: (realLength: number, unit: ScaleUnit, color: string, thickness: number, fontSize: number) => void;
-  onCancel: () => void;
-}
-
-function ScaleBarDialog({ pixelLength, onConfirm, onCancel }: ScaleDialogProps) {
-  const [val,       setVal]       = useState('100');
-  const [unit,      setUnit]      = useState<ScaleUnit>('µm');
-  const [color,     setColor]     = useState('#ffffff');
-  const [thickness, setThickness] = useState(4);
-  const [fontSize,  setFontSize]  = useState(13);
-
-  const handleConfirm = () => {
-    const n = parseFloat(val);
-    if (isNaN(n) || n <= 0) return;
-    onConfirm(n, unit, color, thickness, fontSize);
-  };
-
-  return (
-    <div style={{
-      position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
-      background: 'var(--bg-surface)', border: '1px solid var(--accent)',
-      borderRadius: 10, padding: '14px 18px', zIndex: 30,
-      boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
-      minWidth: 320,
-    }}>
-      <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 12, color: 'var(--text-primary)' }}>
-        Scale Bar — {Math.round(pixelLength)} px drawn
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <div>
-          <div className="input-label">Real-world length</div>
-          <div style={{ display: 'flex', gap: 6 }}>
-            <input
-              className="input"
-              type="number"
-              min="0.001"
-              step="any"
-              value={val}
-              onChange={e => setVal(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') handleConfirm(); if (e.key === 'Escape') onCancel(); }}
-              autoFocus
-              style={{ flex: 1 }}
-            />
-            <select
-              className="select"
-              value={unit}
-              onChange={e => setUnit(e.target.value as ScaleUnit)}
-              style={{ width: 72 }}
-            >
-              {SCALE_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
-            </select>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', gap: 10 }}>
-          <div style={{ flex: 1 }}>
-            <div className="input-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span>Thickness</span><span style={{ color: 'var(--text-primary)' }}>{thickness}px</span>
-            </div>
-            <input type="range" min={1} max={12} value={thickness}
-              onChange={e => setThickness(+e.target.value)} style={{ width: '100%' }} />
-          </div>
-          <div style={{ flex: 1 }}>
-            <div className="input-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span>Font size</span><span style={{ color: 'var(--text-primary)' }}>{fontSize}px</span>
-            </div>
-            <input type="range" min={8} max={32} value={fontSize}
-              onChange={e => setFontSize(+e.target.value)} style={{ width: '100%' }} />
-          </div>
-        </div>
-
-        <div>
-          <div className="input-label">Color</div>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <input type="color" value={color} onChange={e => setColor(e.target.value)}
-              style={{ width: 28, height: 26, border: '1px solid var(--border)', borderRadius: 4, padding: 1, background: 'none', cursor: 'pointer' }} />
-            <input className="input" value={color} onChange={e => setColor(e.target.value)} />
-            {['#ffffff', '#000000', '#ffcc00', '#00ccff', '#ff6060'].map(c => (
-              <div key={c}
-                onClick={() => setColor(c)}
-                style={{
-                  width: 18, height: 18, borderRadius: '50%', background: c, cursor: 'pointer',
-                  border: color === c ? '2px solid var(--accent)' : '1px solid rgba(255,255,255,0.2)',
-                  flexShrink: 0,
-                }}
-              />
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div style={{ display: 'flex', gap: 8, marginTop: 14, justifyContent: 'flex-end' }}>
-        <button className="btn btn-ghost" onClick={onCancel}>Cancel</button>
-        <button className="btn btn-primary" onClick={handleConfirm}>Add Scale Bar</button>
-      </div>
-    </div>
-  );
-}
 
 // ── Component ─────────────────────────────────────────────────────────────
 
@@ -192,7 +88,17 @@ export default function CanvasArea() {
     tool, zoom, setZoom, setPan,
     insets, addInset,
     addImageToGroup,
+    selectedId,
   } = useStore();
+
+  // Compute whether the currently selected object is a calibrated image
+  const selectedCalibratedImg = (() => {
+    if (!selectedId) return null;
+    const obj = doc.objects.find(o => o.id === selectedId);
+    if (!obj || obj.type !== 'image') return null;
+    const img = groups.flatMap(g => g.images).find(i => i.id === (obj as ImageObject).imageId);
+    return img?.calibration ? img : null;
+  })();
 
   // ── Object map: storeId → fabric object ──────────────────────────────
   const objMapRef = useRef<Map<string, fabric.FabricObject>>(new Map());
@@ -210,9 +116,10 @@ export default function CanvasArea() {
   const cropRectRef = useRef<fabric.Rect | null>(null);
 
   // ── Scalebar draw state ───────────────────────────────────────────────
-  const [scalebarPhase, setScalebarPhase] = useState<'idle' | 'drawing' | 'dialog'>('idle');
+  const [scalebarPhase, setScalebarPhase] = useState<'idle' | 'drawing'>('idle');
   const scalebarPreviewRef = useRef<fabric.Line | null>(null);
   const scalebarDrawRef    = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  const scalebarSourceRef  = useRef<{ metersPerCanvasPx: number; unit: ScaleUnit } | null>(null);
 
   // ── Connector lines: pairId → {line, indicator} ──────────────────────
   const connectorMapRef = useRef<Map<string, { line: fabric.Line; indicator: fabric.Rect }>>(new Map());
@@ -269,13 +176,25 @@ export default function CanvasArea() {
       });
     });
 
-    // ── mouse:down — start scalebar draw ─────────────────────────────
+    // ── mouse:down — start scalebar draw (requires calibrated image) ─────
     fc.on('mouse:down', (options) => {
       if (toolRef.current !== 'scalebar') return;
       if (scalebarPhaseRef.current !== 'idle') return;
+
+      // Require a calibrated image to be selected
+      const { selectedId, doc: sd, groups: sg } = useStore.getState();
+      const imgObj = sd.objects.find(o => o.id === selectedId && o.type === 'image') as ImageObject | undefined;
+      const srcGrp = sg.find(gr => gr.id === imgObj?.groupId);
+      const srcImg = srcGrp?.images.find(i => i.id === imgObj?.imageId);
+      const cal    = srcImg?.calibration;
+      if (!imgObj || !srcImg || !cal) return;
+
+      const canvasUnitsPerPx  = cal.unitsPerPixel * (srcImg.width / imgObj.width);
+      const metersPerCanvasPx = canvasUnitsPerPx * (UNIT_METERS[cal.unit] ?? 1e-6);
+      scalebarSourceRef.current = { metersPerCanvasPx, unit: cal.unit };
+
       const pt = getScenePt(fc, options);
       if (!pt) return;
-
       const line = new fabric.Line([pt.x, pt.y, pt.x, pt.y], {
         stroke: '#ffcc00', strokeWidth: 3,
         selectable: false, evented: false,
@@ -304,21 +223,39 @@ export default function CanvasArea() {
     fc.on('mouse:up', (options) => {
       const currentTool = toolRef.current;
 
-      // Finish scalebar draw
+      // Finish scalebar draw — create directly from calibration
       if (currentTool === 'scalebar' && scalebarPhaseRef.current === 'drawing') {
-        // Remove preview line
         if (scalebarPreviewRef.current) {
           fc.remove(scalebarPreviewRef.current);
           scalebarPreviewRef.current = null;
           fc.renderAll();
         }
-        const d = scalebarDrawRef.current;
-        if (!d) { setScalebarPhase('idle'); return; }
+        const d   = scalebarDrawRef.current;
+        const src = scalebarSourceRef.current;
+        scalebarDrawRef.current   = null;
+        scalebarSourceRef.current = null;
+        setScalebarPhase('idle');
+        if (!d || !src) return;
         const dx = d.x2 - d.x1;
         const dy = d.y2 - d.y1;
         const pixLen = Math.sqrt(dx * dx + dy * dy);
-        if (pixLen < 10) { setScalebarPhase('idle'); return; }
-        setScalebarPhase('dialog');
+        if (pixLen < 5) return;
+        const pLen = Math.round(pixLen);
+        const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+        const rawReal = pLen * src.metersPerCanvasPx / (UNIT_METERS[src.unit] ?? 1e-6);
+        // Round to 3 significant figures for a clean label
+        const realLength = parseFloat(rawReal.toPrecision(3));
+        useStore.getState().addObject({
+          id: nanoid(), type: 'scalebar',
+          x: Math.round(Math.min(d.x1, d.x2)),
+          y: Math.round(Math.min(d.y1, d.y2)) - 2,
+          width: pLen, height: 28,
+          rotation: angle, locked: false, visible: true,
+          label: `${realLength} ${src.unit}`,
+          length: pLen, realLength, unit: src.unit,
+          color: '#ffffff', labelColor: '#ffffff', thickness: 4, fontSize: 13,
+          metersPerCanvasPx: src.metersPerCanvasPx,
+        });
         return;
       }
 
@@ -393,32 +330,6 @@ export default function CanvasArea() {
     return () => { fc.dispose(); fabricRef.current = null; };
   }, []);
 
-  // ── Scale bar dialog confirm ──────────────────────────────────────────
-  const confirmScalebar = useCallback((
-    realLength: number, unit: ScaleUnit,
-    color: string, thickness: number, fontSize: number,
-  ) => {
-    const d = scalebarDrawRef.current;
-    if (!d) { setScalebarPhase('idle'); return; }
-    const dx = d.x2 - d.x1;
-    const dy = d.y2 - d.y1;
-    const pixLen = Math.round(Math.sqrt(dx * dx + dy * dy));
-    const angle  = Math.atan2(dy, dx) * (180 / Math.PI);
-    const cx = Math.round(Math.min(d.x1, d.x2));
-    const cy = Math.round(Math.min(d.y1, d.y2));
-
-    useStore.getState().addObject({
-      id: nanoid(), type: 'scalebar',
-      x: cx, y: cy - thickness / 2,
-      width: pixLen, height: thickness + 20,
-      rotation: angle, locked: false, visible: true,
-      label: `${realLength} ${unit}`,
-      length: pixLen, realLength, unit,
-      color, labelColor: color, thickness, fontSize,
-    });
-    scalebarDrawRef.current = null;
-    setScalebarPhase('idle');
-  }, []);
 
   // ── Auto-fit zoom when doc dimensions change ──────────────────────────
   const prevDocSizeRef = useRef({ w: doc.width, h: doc.height });
@@ -512,14 +423,15 @@ export default function CanvasArea() {
     };
   }, []);
 
-  // ── Ctrl+wheel zoom ───────────────────────────────────────────────────
+  // ── Scroll-to-zoom (plain scroll on canvas area) ─────────────────────
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
-      if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
-      setZoom(zoomRef.current + (e.deltaY > 0 ? -0.1 : 0.1));
+      // Pinch-to-zoom (ctrlKey set by browser for trackpad pinch) = fine steps
+      const delta = e.ctrlKey || e.metaKey ? 0.05 : 0.1;
+      setZoom(zoomRef.current + (e.deltaY > 0 ? -delta : delta));
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
@@ -543,8 +455,19 @@ export default function CanvasArea() {
     });
 
     doc.objects.forEach(obj => {
-      const existing = objMapRef.current.get(obj.id) as (fabric.FabricObject & { storeId?: string }) | undefined;
+      const existing = objMapRef.current.get(obj.id) as (fabric.FabricObject & { storeId?: string; _latexKey?: string }) | undefined;
       if (existing) {
+        // LaTeX images must be recreated when content, color, or fontSize changes
+        if (obj.type === 'text' && (obj as TextObject).isLatex) {
+          const o = obj as TextObject;
+          const newKey = `${o.content}||${o.fontSize}||${o.color}`;
+          if (existing._latexKey !== newKey) {
+            fc.remove(existing);
+            objMapRef.current.delete(obj.id);
+            createFabricObject(obj, groups, fc, objMapRef.current);
+            return;
+          }
+        }
         syncFabricProps(existing, obj);
       } else {
         createFabricObject(obj, groups, fc, objMapRef.current);
@@ -637,8 +560,10 @@ export default function CanvasArea() {
     const cx  = (e.clientX - wrapRect.left - vpt[4]) / zoomRef.current;
     const cy  = (e.clientY - wrapRect.top  - vpt[5]) / zoomRef.current;
 
-    const defaultW = Math.min(300, freshDoc.width * 0.25);
-    const defaultH = defaultW / (img.width / img.height);
+    // Place at original pixel size; scale down only if larger than canvas
+    const fitScale = Math.min(1, freshDoc.width / img.width, freshDoc.height / img.height);
+    const defaultW = Math.round(img.width  * fitScale);
+    const defaultH = Math.round(img.height * fitScale);
 
     addObject({
       id: nanoid(), type: 'image',
@@ -724,7 +649,10 @@ export default function CanvasArea() {
 
     // Auto-generate scale bar if parent image is calibrated
     if (srcImg.calibration) {
-      const { realLength, unit, canvasPx } = niceScaleBar(cropSw, insetW, srcImg.calibration);
+      const cal = srcImg.calibration;
+      const { realLength, unit, canvasPx } = niceScaleBar(cropSw, insetW, cal);
+      const canvasUnitsPerPx  = cal.unitsPerPixel * (cropSw / insetW);
+      const metersPerCanvasPx = canvasUnitsPerPx * (UNIT_METERS[cal.unit] ?? 1e-6);
       const sb: ScaleBarObject = {
         id: nanoid(), type: 'scalebar',
         x: insetObj.x + 10,
@@ -734,6 +662,7 @@ export default function CanvasArea() {
         label: `${realLength} ${unit}`,
         length: canvasPx, realLength, unit,
         color: '#ffffff', labelColor: '#ffffff', thickness: 4, fontSize: 13,
+        metersPerCanvasPx,
       };
       addObject(sb);
     }
@@ -776,42 +705,30 @@ export default function CanvasArea() {
         </div>
       )}
 
-      {/* Scalebar draw hint */}
+      {/* Scalebar hints */}
       {tool === 'scalebar' && scalebarPhase === 'idle' && (
         <div style={{
           position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
-          background: 'var(--bg-overlay)', border: '1px solid var(--border)',
+          background: 'var(--bg-overlay)',
+          border: `1px solid ${selectedCalibratedImg ? 'var(--accent)' : 'var(--border)'}`,
           borderRadius: 8, padding: '7px 14px', zIndex: 20, pointerEvents: 'none',
         }}>
-          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-            Click and drag to draw the scale bar line
+          <span style={{ fontSize: 12, color: selectedCalibratedImg ? 'var(--accent)' : 'var(--text-muted)' }}>
+            {selectedCalibratedImg
+              ? `Click and drag to draw scale bar — calibrated from ${selectedCalibratedImg.name}`
+              : 'Select a calibrated image first, then draw a scale bar'}
           </span>
         </div>
       )}
 
-      {/* Scalebar drawing feedback */}
       {scalebarPhase === 'drawing' && (
         <div style={{
           position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
           background: 'var(--bg-overlay)', border: '1px solid var(--warning)',
           borderRadius: 8, padding: '7px 14px', zIndex: 20, pointerEvents: 'none',
         }}>
-          <span style={{ fontSize: 12, color: 'var(--warning)' }}>
-            Release to set end point…
-          </span>
+          <span style={{ fontSize: 12, color: 'var(--warning)' }}>Release to place scale bar…</span>
         </div>
-      )}
-
-      {/* Scale bar size dialog */}
-      {scalebarPhase === 'dialog' && scalebarDrawRef.current && (
-        <ScaleBarDialog
-          pixelLength={Math.round(Math.hypot(
-            scalebarDrawRef.current.x2 - scalebarDrawRef.current.x1,
-            scalebarDrawRef.current.y2 - scalebarDrawRef.current.y1,
-          ))}
-          onConfirm={confirmScalebar}
-          onCancel={() => { scalebarDrawRef.current = null; setScalebarPhase('idle'); }}
-        />
       )}
 
       {/* Inset confirmation toolbar */}
@@ -904,37 +821,41 @@ function createFabricObject(
   if (obj.type === 'text') {
     const o = obj as TextObject;
     if (o.isLatex) {
-      // Render LaTeX asynchronously, then place as image
-      renderLatexToDataUrl(o.content, o.fontSize, o.color).then(({ dataUrl, width }) => {
-        if (!dataUrl) {
-          // Fallback to plain textbox on failure
-          const tb = new fabric.Textbox(o.content, {
-            left: o.x, top: o.y, width: o.width,
-            fontSize: o.fontSize, fill: o.color,
-            fontWeight: o.fontWeight, textAlign: o.align,
-            angle: o.rotation,
-            fontFamily: 'Inter, system-ui, sans-serif',
-          });
-          (tb as typeof tb & { storeId: string }).storeId = obj.id;
-          (tb as typeof tb & { _isLatexImg: boolean })._isLatexImg = false;
-          fc.add(tb);
-          map.set(obj.id, tb);
-          fc.renderAll();
-          return;
-        }
-        fabric.FabricImage.fromURL(dataUrl).then((fImg) => {
+      // Load SVG blob directly into FabricImage — avoids the canvas.toDataURL()
+      // taint issue that makes the intermediate-canvas path silently produce blank output.
+      type LatexFabricImage = fabric.FabricImage & {
+        storeId: string; _isLatexImg: boolean; _latexKey: string;
+      };
+      renderLatexToFabricImage(o.content, o.fontSize, o.color)
+        .then(async (cached) => {
+          const fImg = await cached.clone() as LatexFabricImage;
+          const imgW = fImg.width ?? 100;
+          const scale = imgW > 0 ? o.width / imgW : 1;
           fImg.set({
             left: o.x, top: o.y, angle: o.rotation,
-            scaleX: o.width / width,
-            scaleY: (o.width / width),
+            scaleX: scale, scaleY: scale,
+            selectable: true, evented: true,
           });
-          (fImg as typeof fImg & { storeId: string }).storeId = obj.id;
-          (fImg as typeof fImg & { _isLatexImg: boolean })._isLatexImg = true;
+          fImg.storeId    = obj.id;
+          fImg._isLatexImg = true;
+          fImg._latexKey  = `${o.content}||${o.fontSize}||${o.color}`;
           fc.add(fImg);
           map.set(obj.id, fImg);
           fc.renderAll();
+        })
+        .catch(() => {
+          // Fallback: plain textbox showing stripped content
+          const stripped = o.content.replace(/\\[a-zA-Z]+\{([^}]*)\}/g, '$1').replace(/[\\{}]/g, '');
+          const tb = new fabric.Textbox(stripped || o.content, {
+            left: o.x, top: o.y, width: o.width,
+            fontSize: o.fontSize, fill: o.color,
+            fontWeight: o.fontWeight, textAlign: o.align, angle: o.rotation,
+            fontFamily: 'Inter, system-ui, sans-serif',
+          });
+          (tb as typeof tb & { storeId: string })  .storeId    = obj.id;
+          (tb as typeof tb & { _isLatexImg: boolean })._isLatexImg = false;
+          fc.add(tb); map.set(obj.id, tb); fc.renderAll();
         });
-      });
       return;
     }
     const tb = new fabric.Textbox(o.content, {

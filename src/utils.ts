@@ -14,6 +14,15 @@ export const BORDER_COLORS = [
 
 import type { ImageCalibration, ScaleUnit } from './types';
 
+export const UNIT_METERS: Record<ScaleUnit, number> = {
+  'Å': 1e-10, 'nm': 1e-9, 'µm': 1e-6, 'mm': 1e-3,
+  'cm': 1e-2, 'm': 1, 'km': 1e3,
+};
+
+export function convertUnit(value: number, from: ScaleUnit, to: ScaleUnit): number {
+  return value * UNIT_METERS[from] / UNIT_METERS[to];
+}
+
 /**
  * Given a calibrated image displayed at `displayWidthPx` canvas pixels
  * (original image is `srcWidthPx` pixels wide), return a "nice" scale bar

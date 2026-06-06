@@ -98,13 +98,15 @@ export interface ShapeObject extends CanvasObjectBase {
 
 export interface ScaleBarObject extends CanvasObjectBase {
   type: 'scalebar';
-  length: number;       // pixel length on canvas
-  realLength: number;   // real-world measurement value
+  length: number;           // pixel length on canvas
+  realLength: number;       // real-world measurement value
   unit: ScaleUnit;
   color: string;
   labelColor: string;
   thickness: number;
   fontSize: number;
+  /** meters per canvas pixel — enables live unit conversion and length recalculation */
+  metersPerCanvasPx?: number;
 }
 
 export type CanvasObject = ImageObject | TextObject | ShapeObject | ScaleBarObject;

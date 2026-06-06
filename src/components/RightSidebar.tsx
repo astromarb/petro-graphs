@@ -13,7 +13,7 @@ import type {
 } from '../types';
 // ScaleUnit referenced via ScaleBarObject['unit'] below
 import { DEFAULT_ADJUSTMENTS } from '../types';
-import { BORDER_COLORS as COLORS, niceScaleBar } from '../utils';
+import { BORDER_COLORS as COLORS, niceScaleBar, UNIT_METERS, convertUnit } from '../utils';
 import { nanoid } from '../utils';
 import { Ruler } from 'lucide-react';
 
@@ -222,24 +222,17 @@ function ImagePanel({ obj, update }: { obj: ImageObject; update: (p: Partial<Ima
   const generateScaleBar = () => {
     if (!srcImg || !cal) return;
     const { realLength, unit, canvasPx } = niceScaleBar(srcImg.width, obj.width, cal);
+    const canvasUnitsPerPx  = cal.unitsPerPixel * (srcImg.width / obj.width);
+    const metersPerCanvasPx = canvasUnitsPerPx * (UNIT_METERS[cal.unit] ?? 1e-6);
     const sb: SBO = {
-      id: nanoid(),
-      type: 'scalebar',
-      x: obj.x + 10,
-      y: obj.y + obj.height - 40,
-      width: canvasPx + 20,
-      height: 36,
-      rotation: 0,
-      locked: false,
-      visible: true,
+      id: nanoid(), type: 'scalebar',
+      x: obj.x + 10, y: obj.y + obj.height - 40,
+      width: canvasPx + 20, height: 36,
+      rotation: 0, locked: false, visible: true,
       label: `${realLength} ${unit}`,
-      length: canvasPx,
-      realLength,
-      unit,
-      color: '#ffffff',
-      labelColor: '#ffffff',
-      thickness: 4,
-      fontSize: 13,
+      length: canvasPx, realLength, unit,
+      color: '#ffffff', labelColor: '#ffffff', thickness: 4, fontSize: 13,
+      metersPerCanvasPx,
     };
     addObject(sb);
   };
@@ -462,27 +455,71 @@ function ShapePanel({ obj, update }: { obj: ShapeObject; update: (p: Partial<Sha
 const SCALE_UNITS_SIDEBAR = ['µm', 'nm', 'mm', 'cm', 'm', 'km', 'Å'] as const;
 
 function ScaleBarPanel({ obj, update }: { obj: ScaleBarObject; update: (p: Partial<ScaleBarObject>) => void }) {
+  const hasCal = obj.metersPerCanvasPx != null;
+
+  const handleLengthChange = (newLen: number) => {
+    if (newLen <= 0) return;
+    const patch: Partial<ScaleBarObject> = { length: newLen, width: newLen };
+    if (hasCal) {
+      const newReal = parseFloat(
+        (newLen * obj.metersPerCanvasPx! / (UNIT_METERS[obj.unit] ?? 1e-6)).toPrecision(4)
+      );
+      patch.realLength = newReal;
+      patch.label      = `${newReal} ${obj.unit}`;
+    }
+    update(patch);
+  };
+
+  const handleUnitChange = (newUnit: ScaleBarObject['unit']) => {
+    let newReal: number;
+    if (hasCal) {
+      newReal = parseFloat(
+        (obj.length * obj.metersPerCanvasPx! / (UNIT_METERS[newUnit] ?? 1e-6)).toPrecision(4)
+      );
+    } else {
+      newReal = parseFloat(convertUnit(obj.realLength, obj.unit, newUnit).toPrecision(4));
+    }
+    update({ unit: newUnit, realLength: newReal, label: `${newReal} ${newUnit}` });
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+      {hasCal && (
+        <div style={{ fontSize: 10, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 4 }}>
+          <Ruler size={10} color="#3ecf8e" /> Calibrated — length and units update automatically
+        </div>
+      )}
+
       <div style={{ display: 'flex', gap: 6 }}>
         <div style={{ flex: 2 }}>
           <div className="input-label">Real length</div>
           <input className="input" type="number" value={obj.realLength}
-            onChange={e => update({ realLength: +e.target.value || 1, label: `${+e.target.value || 1} ${obj.unit ?? 'µm'}` })} />
+            onChange={e => {
+              const v = +e.target.value || 1;
+              update({ realLength: v, label: `${v} ${obj.unit}` });
+            }} />
         </div>
         <div style={{ flex: 1 }}>
           <div className="input-label">Unit</div>
           <select className="select" value={obj.unit ?? 'µm'}
-            onChange={e => update({ unit: e.target.value as ScaleBarObject['unit'], label: `${obj.realLength} ${e.target.value}` })}>
+            onChange={e => handleUnitChange(e.target.value as ScaleBarObject['unit'])}>
             {SCALE_UNITS_SIDEBAR.map(u => <option key={u} value={u}>{u}</option>)}
           </select>
         </div>
       </div>
+
       <div>
-        <div className="input-label">Canvas length (px)</div>
+        <div className="input-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <span>Extent (canvas px)</span>
+          <span style={{ color: 'var(--text-primary)' }}>{obj.length} px</span>
+        </div>
+        <input type="range" min={20} max={1200} value={obj.length}
+          onChange={e => handleLengthChange(+e.target.value)} style={{ width: '100%' }} />
         <input className="input" type="number" value={obj.length}
-          onChange={e => update({ length: +e.target.value || 100 })} />
+          onChange={e => handleLengthChange(+e.target.value || obj.length)}
+          style={{ marginTop: 4, fontSize: 11 }} />
       </div>
+
       <div>
         <div className="input-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
           <span>Thickness</span>
