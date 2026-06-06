@@ -13,11 +13,34 @@ const KEY_TOOL_MAP: Record<string, Tool> = {
 };
 
 export default function App() {
-  const { setTool, setZoom, zoom, selectedId, removeObject, duplicateObject } = useStore();
+  const {
+    setTool, setZoom, zoom,
+    selectedId, removeObject, duplicateObject,
+    undo, redo, past, future,
+  } = useStore();
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      const isEditing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(tag);
+
+      // Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y — always handle, even in inputs
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          if (future.length > 0) redo();
+        } else {
+          if (past.length > 0) undo();
+        }
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        if (future.length > 0) redo();
+        return;
+      }
+
+      if (isEditing) return;
 
       const t = KEY_TOOL_MAP[e.key.toLowerCase()];
       if (t) { setTool(t); return; }
@@ -37,7 +60,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [zoom, selectedId]);
+  }, [zoom, selectedId, past, future]);
 
   return (
     <div className="app-shell">

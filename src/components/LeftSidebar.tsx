@@ -1,5 +1,5 @@
 import React, { useRef, useState, useCallback, useEffect } from 'react';
-import { Plus, FolderOpen, ChevronDown, ChevronRight, X, Trash2, Upload, FileImage } from 'lucide-react';
+import { Plus, FolderOpen, ChevronDown, ChevronRight, X, Trash2, Upload, FileImage, ArrowLeftRight } from 'lucide-react';
 import { useStore } from '../store';
 import type { ImageGroup, ThinSectionImage, ImageMode } from '../types';
 import { nanoid } from '../utils';
@@ -280,12 +280,25 @@ export default function LeftSidebar() {
       <div className="panel-section">
         <div className="panel-label"><FolderOpen size={11} /> Canvas</div>
 
-        <div style={{ display: 'flex', gap: 5, marginBottom: 6 }}>
+        <div style={{ display: 'flex', gap: 5, marginBottom: 6, alignItems: 'flex-end' }}>
           <div style={{ flex: 1 }}>
             <div className="input-label">W (px)</div>
             <input className="input" value={canvasW} onChange={e => setCanvasW(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && applySize()} />
           </div>
+          {/* Flip orientation */}
+          <button
+            className="btn-icon"
+            style={{ marginBottom: 1, flexShrink: 0 }}
+            title="Flip orientation (swap W ↔ H)"
+            onClick={() => {
+              setCanvasW(canvasH);
+              setCanvasH(canvasW);
+              setDocMeta({ width: parseInt(canvasH) || doc.height, height: parseInt(canvasW) || doc.width });
+            }}
+          >
+            <ArrowLeftRight size={13} />
+          </button>
           <div style={{ flex: 1 }}>
             <div className="input-label">H (px)</div>
             <input className="input" value={canvasH} onChange={e => setCanvasH(e.target.value)}

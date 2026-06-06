@@ -198,8 +198,9 @@ export default function CanvasArea() {
         return;
       }
 
-      // ── Don't place on top of existing objects ──────────────────────
-      if (target) return;
+      // ── Don't place on top of a user-placed store object ───────────────
+      // (connector lines and indicators have no storeId, so they don't block)
+      if (target && (target as fabric.FabricObject & { storeId?: string }).storeId) return;
 
       const state = useStore.getState();
 
@@ -218,7 +219,7 @@ export default function CanvasArea() {
           id: nanoid(), type: 'shape', shape: 'rect',
           x: cx - 60, y: cy - 40, width: 120, height: 80, rotation: 0,
           locked: false, visible: true, label: 'Shape',
-          fill: '#aa3bff', fillOpacity: 0.05,
+          fill: '#aa3bff', fillOpacity: 0,
           border: { color: '#aa3bff', width: 2, style: 'solid', radius: 4 },
         });
       }
@@ -407,7 +408,7 @@ export default function CanvasArea() {
           top:  parent.y + pair.cropRect.relY,
           width:  pair.cropRect.w,
           height: pair.cropRect.h,
-          fill: 'rgba(170,59,255,0.08)',
+          fill: 'transparent',
           stroke: '#aa3bff', strokeWidth: 1.5,
           strokeDashArray: [4, 3],
           selectable: false, evented: false,

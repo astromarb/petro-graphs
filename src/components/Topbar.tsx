@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import {
   MousePointer2, Type, Square, Ruler, Hand, Crop,
   Download, Layers, Info, ZoomIn, ZoomOut, Maximize2,
+  Undo2, Redo2,
 } from 'lucide-react';
 import { useStore } from '../store';
 import type { Tool } from '../types';
@@ -9,8 +10,7 @@ import type { Tool } from '../types';
 const TOOLS: { id: Tool; icon: React.ReactNode; label: string; sep?: boolean }[] = [
   { id: 'select',   icon: <MousePointer2 size={14} />, label: 'Select (V)' },
   { id: 'pan',      icon: <Hand size={14} />,           label: 'Pan (H)' },
-  { sep: true,      id: 'text',  icon: <></>, label: '' },
-  { id: 'text',     icon: <Type size={14} />,           label: 'Text / LaTeX (T)' },
+  { id: 'text',     icon: <Type size={14} />,           label: 'Text / LaTeX (T)', sep: true },
   { id: 'shape',    icon: <Square size={14} />,          label: 'Shape (S)' },
   { id: 'scalebar', icon: <Ruler size={14} />,           label: 'Scale Bar (B)' },
   { id: 'inset',    icon: <Crop size={14} />,            label: 'Inset (I)' },
@@ -20,11 +20,12 @@ export default function Topbar() {
   const {
     tool, setTool, zoom, setZoom,
     doc, setDocMeta,
+    past, future, undo, redo,
     toggleMetadataPanel, toggleLayersPanel,
   } = useStore();
 
   const [editingTitle, setEditingTitle] = useState(false);
-  const [titleVal, setTitleVal]         = useState(doc.title);
+  const [titleVal, setTitleVal] = useState(doc.title);
 
   const commitTitle = () => {
     setDocMeta({ title: titleVal.trim() || 'Untitled Figure' });
@@ -70,25 +71,47 @@ export default function Topbar() {
 
       <div className="sep" />
 
+      {/* Undo / Redo */}
+      <button
+        className="btn-icon"
+        onClick={undo}
+        disabled={past.length === 0}
+        title={`Undo (Ctrl+Z)${past.length ? ` · ${past.length} steps` : ''}`}
+        style={{ opacity: past.length === 0 ? 0.35 : 1 }}
+      >
+        <Undo2 size={14} />
+      </button>
+      <button
+        className="btn-icon"
+        onClick={redo}
+        disabled={future.length === 0}
+        title={`Redo (Ctrl+Shift+Z)${future.length ? ` · ${future.length} steps` : ''}`}
+        style={{ opacity: future.length === 0 ? 0.35 : 1 }}
+      >
+        <Redo2 size={14} />
+      </button>
+
+      <div className="sep" />
+
       {/* Tool palette */}
       <div style={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-        {TOOLS.map((t, i) => t.sep ? (
-          <div key={`sep-${i}`} className="sep" />
-        ) : (
-          <button
-            key={t.id}
-            className={`btn-icon${tool === t.id ? ' active' : ''}`}
-            title={t.label}
-            onClick={() => setTool(t.id)}
-          >
-            {t.icon}
-          </button>
+        {TOOLS.map((t) => (
+          <React.Fragment key={t.id}>
+            {t.sep && <div className="sep" />}
+            <button
+              className={`btn-icon${tool === t.id ? ' active' : ''}`}
+              title={t.label}
+              onClick={() => setTool(t.id)}
+            >
+              {t.icon}
+            </button>
+          </React.Fragment>
         ))}
       </div>
 
       <div className="sep" />
 
-      {/* Zoom controls */}
+      {/* Zoom */}
       <button className="btn-icon" onClick={() => setZoom(zoom - 0.1)} title="Zoom out (-)">
         <ZoomOut size={14} />
       </button>
@@ -104,7 +127,6 @@ export default function Topbar() {
 
       <div style={{ flex: 1 }} />
 
-      {/* Right actions */}
       <button className="btn-icon" title="Layers" onClick={toggleLayersPanel}>
         <Layers size={14} />
       </button>
