@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useCallback, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { ChevronsUp, ChevronUp, ChevronDown, ChevronsDown, Copy, Trash2, Lock, Unlock, Eye, EyeOff } from 'lucide-react';
 import * as fabric from 'fabric';
 import { useStore } from '../store';
 import type {
   CanvasObject, ImageObject, TextObject, ShapeObject, ScaleBarObject,
-  BorderStyle, InsetPair, ThinSectionImage, ImageAdjustments, ScaleUnit,
+  BorderStyle, InsetPair, ThinSectionImage, ImageAdjustments, ScaleUnit, CanvasDoc,
 } from '../types';
 import { DEFAULT_ADJUSTMENTS } from '../types';
 import { nanoid, niceScaleBar, UNIT_METERS, ptToPx } from '../utils';
@@ -177,7 +179,12 @@ export default function CanvasArea() {
     insets, addInset,
     addImageToGroup,
     selectedId, showRulers,
+    bringToFront, sendToBack, bringForward, sendBackward,
+    duplicateObject, removeObject, updateObject,
   } = useStore();
+
+  // ── Context menu state ────────────────────────────────────────────────
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; objId: string | null } | null>(null);
 
   // Compute whether the currently selected object is a calibrated image
   const selectedCalibratedImg = (() => {
@@ -612,6 +619,12 @@ export default function CanvasArea() {
       }
     });
 
+    // Enforce Fabric z-order to match store order (index 0 = back, last = front)
+    doc.objects.forEach((obj, idx) => {
+      const fObj = objMapRef.current.get(obj.id);
+      if (fObj) (fc as fabric.Canvas & { moveObjectTo(obj: fabric.FabricObject, index: number): void }).moveObjectTo(fObj, idx);
+    });
+
     fc.renderAll();
   }, [doc.objects, groups]);
 
@@ -823,6 +836,29 @@ export default function CanvasArea() {
     setInsetSourceId(null);
   }, []);
 
+  // ── Context menu (right-click) ────────────────────────────────────────
+  const onContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const fc = fabricRef.current;
+    const canvasEl = canvasElRef.current;
+    if (!fc || !canvasEl) return;
+
+    const rect = canvasEl.getBoundingClientRect();
+    const vpt  = fc.viewportTransform ?? [1, 0, 0, 1, 0, 0];
+    const z    = fc.getZoom();
+    const sceneX = (e.clientX - rect.left  - vpt[4]) / z;
+    const sceneY = (e.clientY - rect.top   - vpt[5]) / z;
+
+    // Topmost object at click point (last in array = visually on top)
+    const sd  = useStore.getState();
+    const hit = [...sd.doc.objects].reverse().find(o =>
+      o.visible !== false &&
+      sceneX >= o.x && sceneX <= o.x + o.width &&
+      sceneY >= o.y && sceneY <= o.y + o.height,
+    );
+    setCtxMenu({ x: e.clientX, y: e.clientY, objId: hit?.id ?? null });
+  }, []);
+
   // ── Render ────────────────────────────────────────────────────────────
   return (
     <div
@@ -832,6 +868,7 @@ export default function CanvasArea() {
       onDrop={onDrop}
       onDragOver={e => { e.preventDefault(); setDropHighlight(true); }}
       onDragLeave={() => setDropHighlight(false)}
+      onContextMenu={onContextMenu}
     >
       {/* Drop overlay */}
       {dropHighlight && (
@@ -924,6 +961,25 @@ export default function CanvasArea() {
         <span style={{ color: 'var(--border)' }}>|</span>
         <span>{doc.dpi} dpi</span>
       </div>
+
+      {/* Right-click context menu */}
+      {ctxMenu && createPortal(
+        <CanvasContextMenu
+          x={ctxMenu.x}
+          y={ctxMenu.y}
+          objId={ctxMenu.objId}
+          doc={doc}
+          onClose={() => setCtxMenu(null)}
+          bringToFront={bringToFront}
+          sendToBack={sendToBack}
+          bringForward={bringForward}
+          sendBackward={sendBackward}
+          duplicateObject={duplicateObject}
+          removeObject={removeObject}
+          updateObject={updateObject}
+        />,
+        document.body,
+      )}
     </div>
   );
 }
@@ -1142,4 +1198,111 @@ function syncFabricProps(
     fObj.set({ fill: o.fillOpacity === 0 ? 'transparent' : o.fill });
     applyBorder(fObj, o.border);
   }
+}
+
+// ── Canvas context menu ───────────────────────────────────────────────────
+
+interface CtxMenuProps {
+  x: number; y: number;
+  objId: string | null;
+  doc: CanvasDoc;
+  onClose: () => void;
+  bringToFront:  (id: string) => void;
+  sendToBack:    (id: string) => void;
+  bringForward:  (id: string) => void;
+  sendBackward:  (id: string) => void;
+  duplicateObject: (id: string) => void;
+  removeObject:    (id: string) => void;
+  updateObject:    (id: string, patch: Partial<CanvasObject>) => void;
+}
+
+function CanvasContextMenu({
+  x, y, objId, doc, onClose,
+  bringToFront, sendToBack, bringForward, sendBackward,
+  duplicateObject, removeObject, updateObject,
+}: CtxMenuProps) {
+  const obj  = objId ? doc.objects.find(o => o.id === objId) : null;
+  const idx  = objId ? doc.objects.findIndex(o => o.id === objId) : -1;
+  const atTop    = idx === doc.objects.length - 1;
+  const atBottom = idx === 0;
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const safeX = Math.min(x, window.innerWidth  - 192);
+  const safeY = Math.min(y, window.innerHeight - (obj ? 264 : 56));
+
+  const run = (fn: () => void) => { fn(); onClose(); };
+
+  const item = (
+    label: string,
+    icon: React.ReactNode,
+    action: () => void,
+    danger = false,
+    disabled = false,
+  ) => (
+    <button
+      key={label}
+      disabled={disabled}
+      onClick={disabled ? undefined : () => run(action)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8,
+        width: '100%', padding: '6px 14px',
+        background: 'none', border: 'none', cursor: disabled ? 'default' : 'pointer',
+        color: disabled ? 'var(--text-muted)' : danger ? 'var(--danger)' : 'var(--text-primary)',
+        fontSize: 12, textAlign: 'left', opacity: disabled ? 0.45 : 1,
+        borderRadius: 0,
+      }}
+      onMouseEnter={e => { if (!disabled) (e.currentTarget as HTMLButtonElement).style.background = danger ? 'rgba(224,92,92,0.12)' : 'rgba(255,255,255,0.07)'; }}
+      onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'none'; }}
+    >
+      {icon}{label}
+    </button>
+  );
+
+  return (
+    <>
+      <div
+        style={{ position: 'fixed', inset: 0, zIndex: 99998 }}
+        onClick={onClose}
+        onContextMenu={e => { e.preventDefault(); onClose(); }}
+      />
+      <div style={{
+        position: 'fixed', left: safeX, top: safeY, zIndex: 99999,
+        background: 'var(--surface-2)', border: '1px solid var(--border)',
+        borderRadius: 8, padding: '4px 0', minWidth: 180,
+        boxShadow: '0 8px 32px rgba(0,0,0,0.65)',
+      }}>
+        {obj ? (
+          <>
+            {item('Bring to Front', <ChevronsUp  size={12}/>, () => bringToFront(objId!), false, atTop)}
+            {item('Bring Forward',  <ChevronUp   size={12}/>, () => bringForward(objId!), false, atTop)}
+            {item('Send Backward',  <ChevronDown size={12}/>, () => sendBackward(objId!), false, atBottom)}
+            {item('Send to Back',   <ChevronsDown size={12}/>, () => sendToBack(objId!), false, atBottom)}
+            <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
+            {item('Duplicate', <Copy    size={12}/>, () => duplicateObject(objId!))}
+            {item('Delete',    <Trash2  size={12}/>, () => removeObject(objId!), true)}
+            <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
+            {item(
+              obj.locked ? 'Unlock' : 'Lock',
+              obj.locked ? <Unlock size={12}/> : <Lock size={12}/>,
+              () => updateObject(objId!, { locked: !obj.locked }),
+            )}
+            {item(
+              obj.visible ? 'Hide' : 'Show',
+              obj.visible ? <EyeOff size={12}/> : <Eye size={12}/>,
+              () => updateObject(objId!, { visible: !obj.visible }),
+            )}
+          </>
+        ) : (
+          <div style={{ padding: '6px 14px', fontSize: 12, color: 'var(--text-muted)' }}>
+            Right-click on an object
+          </div>
+        )}
+      </div>
+    </>
+  );
 }

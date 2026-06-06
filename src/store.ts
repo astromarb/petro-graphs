@@ -107,6 +107,10 @@ export interface AppState {
   updateObject:       (id: string, patch: Partial<CanvasObject>) => void;
   removeObject:       (id: string) => void;
   reorderObjects:     (ids: string[]) => void;
+  bringToFront:       (id: string) => void;
+  sendToBack:         (id: string) => void;
+  bringForward:       (id: string) => void;
+  sendBackward:       (id: string) => void;
   duplicateObject:    (id: string) => void;
   batchUpdateObjects: (updates: { id: string; patch: Partial<CanvasObject> }[]) => void;
 
@@ -358,6 +362,42 @@ export const useStore = create<AppState>()(
       s.doc.objects = ids
         .map(id => s.doc.objects.find(o => o.id === id))
         .filter(Boolean) as typeof s.doc.objects;
+      persistFromState(s);
+    }),
+    bringToFront: (id) => set((s) => {
+      const i = s.doc.objects.findIndex(o => o.id === id);
+      if (i < 0 || i === s.doc.objects.length - 1) return;
+      pushHistory(s);
+      const obj = s.doc.objects[i];
+      s.doc.objects.splice(i, 1);
+      s.doc.objects.push(obj);
+      persistFromState(s);
+    }),
+    sendToBack: (id) => set((s) => {
+      const i = s.doc.objects.findIndex(o => o.id === id);
+      if (i <= 0) return;
+      pushHistory(s);
+      const obj = s.doc.objects[i];
+      s.doc.objects.splice(i, 1);
+      s.doc.objects.unshift(obj);
+      persistFromState(s);
+    }),
+    bringForward: (id) => set((s) => {
+      const i = s.doc.objects.findIndex(o => o.id === id);
+      if (i < 0 || i === s.doc.objects.length - 1) return;
+      pushHistory(s);
+      const tmp = s.doc.objects[i + 1];
+      s.doc.objects[i + 1] = s.doc.objects[i];
+      s.doc.objects[i] = tmp;
+      persistFromState(s);
+    }),
+    sendBackward: (id) => set((s) => {
+      const i = s.doc.objects.findIndex(o => o.id === id);
+      if (i <= 0) return;
+      pushHistory(s);
+      const tmp = s.doc.objects[i - 1];
+      s.doc.objects[i - 1] = s.doc.objects[i];
+      s.doc.objects[i] = tmp;
       persistFromState(s);
     }),
     batchUpdateObjects: (updates) => set((s) => {
