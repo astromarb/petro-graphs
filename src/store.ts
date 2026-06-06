@@ -136,7 +136,25 @@ export const useStore = create<AppState>()(
 
     // ── Document ──────────────────────────────────────────────────────────
     doc: defaultDoc,
-    setDocMeta:     (patch) => set((s) => { Object.assign(s.doc, patch); }),
+    setDocMeta: (patch) => set((s) => {
+      const oldW = s.doc.width;
+      const oldH = s.doc.height;
+      Object.assign(s.doc, patch);
+      // Scale existing objects proportionally when canvas dimensions change
+      const newW = s.doc.width;
+      const newH = s.doc.height;
+      if ((newW !== oldW || newH !== oldH) && s.doc.objects.length > 0) {
+        const sx = newW / oldW;
+        const sy = newH / oldH;
+        s.doc.objects.forEach(obj => {
+          obj.x      = Math.round(obj.x      * sx);
+          obj.y      = Math.round(obj.y      * sy);
+          obj.width  = Math.round(obj.width  * sx);
+          obj.height = Math.round(obj.height * sy);
+          if (obj.type === 'scalebar') obj.length = Math.round(obj.length * sx);
+        });
+      }
+    }),
     updateMetadata: (patch) => set((s) => { Object.assign(s.doc.metadata, patch); }),
 
     // ── Canvas objects ────────────────────────────────────────────────────

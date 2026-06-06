@@ -3,21 +3,26 @@ import * as fabric from 'fabric';
 
 const cache = new Map<string, fabric.FabricImage>();
 
-// Collect all @font-face rules from document stylesheets and convert to base64 data URLs
-async function collectFontFaces(): Promise<string> {
-  const rules: string[] = [];
+/**
+ * Collect all CSS needed to render KaTeX HTML inside an SVG foreignObject:
+ * - All @font-face rules with woff2 URLs replaced by inline base64
+ * - All rules that reference KaTeX class names (.katex, .mord, .mrel, etc.)
+ *
+ * Without the structural KaTeX CSS, spans collapse and glyphs are invisible.
+ */
+async function collectStylesForSvg(): Promise<string> {
+  const fontFaceRules: string[] = [];
+  const katexRules:    string[] = [];
+
   for (const sheet of Array.from(document.styleSheets)) {
     let cssRules: CSSRuleList;
     try { cssRules = sheet.cssRules; } catch { continue; }
+
     for (const rule of Array.from(cssRules)) {
       if (rule instanceof CSSFontFaceRule) {
         const src = rule.style.getPropertyValue('src');
-        // Find woff2 URL(s)
         const matches = src.match(/url\(["']?([^"')]+\.woff2[^"')]*?)["']?\)/gi);
-        if (!matches) {
-          rules.push(rule.cssText);
-          continue;
-        }
+        if (!matches) { fontFaceRules.push(rule.cssText); continue; }
         let converted = rule.cssText;
         for (const m of matches) {
           const urlMatch = m.match(/url\(["']?([^"')]+)["']?\)/i);
@@ -26,21 +31,28 @@ async function collectFontFaces(): Promise<string> {
           try {
             const resp = await fetch(url);
             const buf  = await resp.arrayBuffer();
-            const b64  = btoa(String.fromCharCode(...new Uint8Array(buf)));
-            converted  = converted.replace(url, `data:font/woff2;base64,${b64}`);
-          } catch { /* leave original */ }
+            // btoa on large buffers — chunked to avoid call-stack overflow
+            const bytes = new Uint8Array(buf);
+            let binary = '';
+            const CHUNK = 8192;
+            for (let i = 0; i < bytes.length; i += CHUNK)
+              binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+            converted = converted.replace(url, `data:font/woff2;base64,${btoa(binary)}`);
+          } catch { /* leave original URL */ }
         }
-        rules.push(converted);
+        fontFaceRules.push(converted);
+      } else if (/katex|\.mord|\.mrel|\.mbin|\.mop|\.minner|\.base|\.strut/i.test(rule.cssText)) {
+        katexRules.push(rule.cssText);
       }
     }
   }
-  return rules.join('\n');
+  return [...fontFaceRules, ...katexRules].join('\n');
 }
 
-let fontFaceCache: string | null = null;
-async function getFontFaces(): Promise<string> {
-  if (fontFaceCache === null) fontFaceCache = await collectFontFaces();
-  return fontFaceCache;
+let svgStyleCache: string | null = null;
+async function getStylesForSvg(): Promise<string> {
+  if (svgStyleCache === null) svgStyleCache = await collectStylesForSvg();
+  return svgStyleCache;
 }
 
 export async function renderLatexToFabricImage(
@@ -73,7 +85,7 @@ export async function renderLatexToFabricImage(
   document.body.removeChild(host);
 
   // 3. Build SVG with foreignObject
-  const fontFaces = await getFontFaces();
+  const fontFaces = await getStylesForSvg();
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">
   <defs><style>${fontFaces}
     .katex { font-size: ${fontSize}px; color: ${color}; }
@@ -120,7 +132,7 @@ export async function renderLatexToDataUrl(
   const h = Math.ceil(rect.height + 10);
   document.body.removeChild(host);
 
-  const fontFaces = await getFontFaces();
+  const fontFaces = await getStylesForSvg();
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">
   <defs><style>${fontFaces}

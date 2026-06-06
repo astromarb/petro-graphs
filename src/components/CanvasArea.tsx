@@ -420,6 +420,22 @@ export default function CanvasArea() {
     setScalebarPhase('idle');
   }, []);
 
+  // ── Auto-fit zoom when doc dimensions change ──────────────────────────
+  const prevDocSizeRef = useRef({ w: doc.width, h: doc.height });
+  useEffect(() => {
+    const prev = prevDocSizeRef.current;
+    if (prev.w === doc.width && prev.h === doc.height) return;
+    prevDocSizeRef.current = { w: doc.width, h: doc.height };
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const padded = 0.92; // leave 8% margin
+    const fitZoom = Math.min(
+      (wrap.clientWidth  * padded) / doc.width,
+      (wrap.clientHeight * padded) / doc.height,
+    );
+    setZoom(Math.max(0.05, Math.min(4, fitZoom)));
+  }, [doc.width, doc.height, setZoom]);
+
   // ── Canvas size, zoom & background ───────────────────────────────────────
   // Canvas element dimensions = doc size × zoom so the document boundary
   // visually shrinks/grows with zoom rather than staying fixed.
