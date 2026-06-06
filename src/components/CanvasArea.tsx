@@ -6,7 +6,7 @@ import type {
   BorderStyle, InsetPair, ThinSectionImage, ImageAdjustments, ScaleUnit,
 } from '../types';
 import { DEFAULT_ADJUSTMENTS } from '../types';
-import { nanoid } from '../utils';
+import { nanoid, niceScaleBar } from '../utils';
 import { renderLatexToDataUrl } from '../latexRenderer';
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -705,6 +705,22 @@ export default function CanvasArea() {
       cropRect: { relX, relY, w: crW, h: crH },
     };
     addInset(pair);
+
+    // Auto-generate scale bar if parent image is calibrated
+    if (srcImg.calibration) {
+      const { realLength, unit, canvasPx } = niceScaleBar(cropSw, insetW, srcImg.calibration);
+      const sb: ScaleBarObject = {
+        id: nanoid(), type: 'scalebar',
+        x: insetObj.x + 10,
+        y: insetObj.y + insetObj.height - 40,
+        width: canvasPx + 20, height: 36,
+        rotation: 0, locked: false, visible: true,
+        label: `${realLength} ${unit}`,
+        length: canvasPx, realLength, unit,
+        color: '#ffffff', labelColor: '#ffffff', thickness: 4, fontSize: 13,
+      };
+      addObject(sb);
+    }
 
     fc.remove(cropRect);
     cropRectRef.current = null;

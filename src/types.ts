@@ -1,4 +1,15 @@
 export type ImageMode = 'PPL' | 'XPL';
+export type ScaleUnit = 'µm' | 'nm' | 'mm' | 'cm' | 'm' | 'km' | 'Å';
+
+export interface ImageCalibration {
+  /** real-world length per original image pixel */
+  unitsPerPixel: number;
+  unit: ScaleUnit;
+  /** pixel distance used when calibrating (in original image pixels) */
+  refPixelDistance: number;
+  /** real-world length provided by user */
+  refRealLength: number;
+}
 
 export interface ThinSectionImage {
   id: string;
@@ -7,6 +18,7 @@ export interface ThinSectionImage {
   dataUrl: string;
   width: number;
   height: number;
+  calibration?: ImageCalibration;
 }
 
 export interface ImageGroup {
@@ -83,8 +95,6 @@ export interface ShapeObject extends CanvasObjectBase {
   fillOpacity: number;
   border: BorderStyle;
 }
-
-export type ScaleUnit = 'µm' | 'nm' | 'mm' | 'cm' | 'm' | 'km' | 'Å';
 
 export interface ScaleBarObject extends CanvasObjectBase {
   type: 'scalebar';

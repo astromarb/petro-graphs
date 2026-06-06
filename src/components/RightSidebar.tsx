@@ -9,11 +9,13 @@ import {
 import { useStore } from '../store';
 import type {
   CanvasObject, ImageObject, TextObject, ShapeObject, ScaleBarObject,
-  BorderStyle, ImageAdjustments,
+  BorderStyle, ImageAdjustments, ScaleBarObject as SBO,
 } from '../types';
 // ScaleUnit referenced via ScaleBarObject['unit'] below
 import { DEFAULT_ADJUSTMENTS } from '../types';
-import { BORDER_COLORS as COLORS } from '../utils';
+import { BORDER_COLORS as COLORS, niceScaleBar } from '../utils';
+import { nanoid } from '../utils';
+import { Ruler } from 'lucide-react';
 
 // ── KaTeX preview ────────────────────────────────────────────────────────
 function LatexPreview({ latex }: { latex: string }) {
@@ -212,7 +214,35 @@ function AdjustmentsPanel({ adj, onChange }: {
 
 // ── Image object panel ───────────────────────────────────────────────────
 function ImagePanel({ obj, update }: { obj: ImageObject; update: (p: Partial<ImageObject>) => void }) {
+  const { groups, addObject, pushCalibration } = useStore();
+  const srcImg = groups.flatMap(g => g.images).find(i => i.id === obj.imageId);
+  const cal = srcImg?.calibration;
   const adj = obj.adjustments ?? { ...DEFAULT_ADJUSTMENTS };
+
+  const generateScaleBar = () => {
+    if (!srcImg || !cal) return;
+    const { realLength, unit, canvasPx } = niceScaleBar(srcImg.width, obj.width, cal);
+    const sb: SBO = {
+      id: nanoid(),
+      type: 'scalebar',
+      x: obj.x + 10,
+      y: obj.y + obj.height - 40,
+      width: canvasPx + 20,
+      height: 36,
+      rotation: 0,
+      locked: false,
+      visible: true,
+      label: `${realLength} ${unit}`,
+      length: canvasPx,
+      realLength,
+      unit,
+      color: '#ffffff',
+      labelColor: '#ffffff',
+      thickness: 4,
+      fontSize: 13,
+    };
+    addObject(sb);
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -278,6 +308,39 @@ function ImagePanel({ obj, update }: { obj: ImageObject; update: (p: Partial<Ima
       <AdjustmentsPanel adj={adj} onChange={patch => update({ adjustments: { ...adj, ...patch } })} />
 
       <BorderEditor border={obj.border} onChange={patch => update({ border: { ...obj.border, ...patch } })} />
+
+      <Section title="Scale Calibration" defaultOpen={true}>
+        {cal ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+              <Ruler size={11} style={{ display: 'inline', marginRight: 4, color: '#3ecf8e' }} />
+              {cal.refRealLength} {cal.unit} / {Math.round(cal.refPixelDistance)} px
+              &nbsp;({(cal.unitsPerPixel).toExponential(3)} {cal.unit}/px)
+            </div>
+            <button className="btn btn-primary" style={{ fontSize: 11 }} onClick={generateScaleBar}>
+              <Ruler size={11} /> Generate scale bar
+            </button>
+            {srcImg && (
+              <button className="btn btn-ghost" style={{ fontSize: 11 }}
+                onClick={() => pushCalibration(obj.groupId, srcImg)}>
+                Re-calibrate
+              </button>
+            )}
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+              Not calibrated. Set scale to enable scale bar generation.
+            </div>
+            {srcImg && (
+              <button className="btn btn-ghost" style={{ fontSize: 11 }}
+                onClick={() => pushCalibration(obj.groupId, srcImg)}>
+                <Ruler size={11} /> Set calibration
+              </button>
+            )}
+          </div>
+        )}
+      </Section>
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import React, { useRef, useState, useCallback } from 'react';
-import { Plus, FolderOpen, ChevronDown, ChevronRight, X, Trash2, Upload, FileImage, ArrowLeftRight } from 'lucide-react';
+import { Plus, FolderOpen, ChevronDown, ChevronRight, X, Trash2, Upload, FileImage, ArrowLeftRight, Ruler } from 'lucide-react';
 import { useStore } from '../store';
 import type { ImageGroup, ThinSectionImage, ImageMode } from '../types';
 import { nanoid } from '../utils';
@@ -48,7 +48,7 @@ const PAGE_PRESETS: PagePreset[] = [
 
 // ── Image card in group ───────────────────────────────────────────────────
 function ImageCard({ img, groupId }: { img: ThinSectionImage; groupId: string }) {
-  const { removeImageFromGroup } = useStore();
+  const { removeImageFromGroup, pushCalibration } = useStore();
 
   const handleDragStart = (e: React.DragEvent) => {
     e.dataTransfer.setData('application/petro-image', JSON.stringify({ imageId: img.id, groupId }));
@@ -75,6 +75,20 @@ function ImageCard({ img, groupId }: { img: ThinSectionImage; groupId: string })
         >
           <X size={10} />
         </button>
+        {img.calibration ? (
+          <div style={{ position: 'absolute', bottom: 3, right: 3 }} title={`Calibrated: ${img.calibration.refRealLength} ${img.calibration.unit} / ${Math.round(img.calibration.refPixelDistance)} px`}>
+            <Ruler size={10} color="#3ecf8e" />
+          </div>
+        ) : (
+          <button
+            className="btn-icon"
+            style={{ position: 'absolute', bottom: 2, right: 2, padding: 2, background: 'rgba(0,0,0,0.6)' }}
+            onClick={() => pushCalibration(groupId, img)}
+            title="Set calibration"
+          >
+            <Ruler size={10} />
+          </button>
+        )}
       </div>
       <div style={{ padding: '3px 6px', fontSize: 10, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {img.name}
@@ -85,7 +99,7 @@ function ImageCard({ img, groupId }: { img: ThinSectionImage; groupId: string })
 
 // ── Group card ────────────────────────────────────────────────────────────
 function GroupCard({ group }: { group: ImageGroup }) {
-  const { toggleGroupExpanded, updateGroup, removeGroup, addImageToGroup } = useStore();
+  const { toggleGroupExpanded, updateGroup, removeGroup, addImageToGroup, pushCalibration } = useStore();
   const fileRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
 
@@ -94,15 +108,17 @@ function GroupCard({ group }: { group: ImageGroup }) {
       if (!file.type.startsWith('image/')) continue;
       try {
         const { dataUrl, w, h } = await readFileAsDataUrl(file);
-        addImageToGroup(group.id, {
+        const newImg: import('../types').ThinSectionImage = {
           id: nanoid(),
           mode: detectMode(file.name),
           name: file.name,
           dataUrl, width: w, height: h,
-        });
+        };
+        addImageToGroup(group.id, newImg);
+        pushCalibration(group.id, newImg);
       } catch { /* skip bad files */ }
     }
-  }, [group.id, addImageToGroup]);
+  }, [group.id, addImageToGroup, pushCalibration]);
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();

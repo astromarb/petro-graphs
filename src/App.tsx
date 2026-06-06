@@ -5,6 +5,7 @@ import CanvasArea from './components/CanvasArea';
 import RightSidebar from './components/RightSidebar';
 import MetadataModal from './components/MetadataModal';
 import LayersPanel from './components/LayersPanel';
+import CalibrationModal from './components/CalibrationModal';
 import { useStore } from './store';
 import type { Tool } from './types';
 
@@ -70,6 +71,7 @@ export default function App() {
       <RightSidebar />
       <MetadataModal />
       <LayersPanel />
+      <CalibrationModal />
     </div>
   );
 }

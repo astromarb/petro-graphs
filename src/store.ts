@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import type {
-  CanvasDoc, CanvasObject, ImageGroup, ThinSectionImage, Tool, InsetPair,
+  CanvasDoc, CanvasObject, ImageGroup, ThinSectionImage, Tool, InsetPair, ImageCalibration,
 } from './types';
 
 type Snapshot = { objects: CanvasObject[]; insets: InsetPair[] };
@@ -24,6 +24,12 @@ function pushHistory(s: {
 }
 
 export interface AppState {
+  // Calibration queue — images waiting to be calibrated after upload
+  calibrationQueue: { groupId: string; image: ThinSectionImage }[];
+  pushCalibration:         (groupId: string, image: ThinSectionImage) => void;
+  shiftCalibration:        () => void;
+  updateImageCalibration:  (groupId: string, imageId: string, cal: ImageCalibration) => void;
+
   // Library
   groups: ImageGroup[];
   addGroup:              (group: ImageGroup) => void;
@@ -94,6 +100,19 @@ const defaultDoc: CanvasDoc = {
 
 export const useStore = create<AppState>()(
   immer((set) => ({
+    // ── Calibration queue ─────────────────────────────────────────────────
+    calibrationQueue: [],
+    pushCalibration: (groupId, image) => set((s) => {
+      s.calibrationQueue.push({ groupId, image });
+    }),
+    shiftCalibration: () => set((s) => { s.calibrationQueue.shift(); }),
+    updateImageCalibration: (groupId, imageId, cal) => set((s) => {
+      const g = s.groups.find(g => g.id === groupId);
+      if (!g) return;
+      const img = g.images.find(i => i.id === imageId);
+      if (img) img.calibration = cal;
+    }),
+
     // ── Library ──────────────────────────────────────────────────────────
     groups: [],
     addGroup: (group) => set((s) => { s.groups.push(group); }),
