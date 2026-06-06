@@ -67,7 +67,9 @@ async function cropDataUrl(
   });
 }
 
-function scenePoint(options: fabric.TEvent): fabric.Point | null {
+function getScenePt(fc: fabric.Canvas, options: fabric.TEvent): fabric.Point | null {
+  // Fabric v6: getScenePoint(e) converts DOM mouse coords → scene (canvas) coords
+  try { return fc.getScenePoint(options.e as MouseEvent); } catch { /* fallback */ }
   const o = options as unknown as { scenePoint?: fabric.Point; absolutePointer?: fabric.Point };
   return o.scenePoint ?? o.absolutePointer ?? null;
 }
@@ -271,7 +273,7 @@ export default function CanvasArea() {
     fc.on('mouse:down', (options) => {
       if (toolRef.current !== 'scalebar') return;
       if (scalebarPhaseRef.current !== 'idle') return;
-      const pt = scenePoint(options);
+      const pt = getScenePt(fc, options);
       if (!pt) return;
 
       const line = new fabric.Line([pt.x, pt.y, pt.x, pt.y], {
@@ -290,7 +292,7 @@ export default function CanvasArea() {
     fc.on('mouse:move', (options) => {
       if (toolRef.current !== 'scalebar') return;
       if (scalebarPhaseRef.current !== 'drawing') return;
-      const pt = scenePoint(options);
+      const pt = getScenePt(fc, options);
       if (!pt || !scalebarPreviewRef.current || !scalebarDrawRef.current) return;
       scalebarPreviewRef.current.set({ x2: pt.x, y2: pt.y });
       scalebarDrawRef.current.x2 = pt.x;
@@ -323,7 +325,7 @@ export default function CanvasArea() {
       if (!['text', 'shape', 'inset'].includes(currentTool)) return;
 
       const target = options.target as (fabric.FabricObject & { storeId?: string }) | null;
-      const pt = scenePoint(options);
+      const pt = getScenePt(fc, options);
       if (!pt) return;
       const cx = Math.round(pt.x);
       const cy = Math.round(pt.y);
@@ -418,22 +420,25 @@ export default function CanvasArea() {
     setScalebarPhase('idle');
   }, []);
 
-  // ── Canvas size & background ──────────────────────────────────────────
+  // ── Canvas size, zoom & background ───────────────────────────────────────
+  // Canvas element dimensions = doc size × zoom so the document boundary
+  // visually shrinks/grows with zoom rather than staying fixed.
   useEffect(() => {
     const fc = fabricRef.current;
     if (!fc) return;
-    fc.setDimensions({ width: doc.width, height: doc.height });
-    fc.backgroundColor = doc.background;
-    fc.renderAll();
-  }, [doc.width, doc.height, doc.background]);
-
-  // ── Zoom ──────────────────────────────────────────────────────────────
-  useEffect(() => {
-    const fc = fabricRef.current;
-    if (!fc) return;
+    fc.setDimensions({ width: Math.round(doc.width * zoom), height: Math.round(doc.height * zoom) });
     fc.setZoom(zoom);
     fc.renderAll();
-  }, [zoom]);
+  }, [zoom, doc.width, doc.height]);
+
+  useEffect(() => {
+    const fc = fabricRef.current;
+    if (!fc) return;
+    fc.backgroundColor = doc.background;
+    fc.renderAll();
+  }, [doc.background]);
+
+
 
   // ── Tool mode (cursor, selection) ─────────────────────────────────────
   useEffect(() => {
@@ -602,7 +607,9 @@ export default function CanvasArea() {
     if (!raw) return;
     const { imageId, groupId } = JSON.parse(raw) as { imageId: string; groupId: string };
 
-    const group = groups.find(g => g.id === groupId);
+    // Always read fresh state so images from newly added groups are found
+    const { groups: freshGroups, doc: freshDoc } = useStore.getState();
+    const group = freshGroups.find(g => g.id === groupId);
     const img   = group?.images.find(i => i.id === imageId);
     if (!img) return;
 
@@ -611,10 +618,10 @@ export default function CanvasArea() {
     if (!fc || !wrapRect) return;
 
     const vpt = fc.viewportTransform;
-    const cx  = (e.clientX - wrapRect.left - vpt[4]) / zoom;
-    const cy  = (e.clientY - wrapRect.top  - vpt[5]) / zoom;
+    const cx  = (e.clientX - wrapRect.left - vpt[4]) / zoomRef.current;
+    const cy  = (e.clientY - wrapRect.top  - vpt[5]) / zoomRef.current;
 
-    const defaultW = Math.min(300, doc.width * 0.25);
+    const defaultW = Math.min(300, freshDoc.width * 0.25);
     const defaultH = defaultW / (img.width / img.height);
 
     addObject({
@@ -630,7 +637,7 @@ export default function CanvasArea() {
       showModeTag: true, tagPosition: 'tl', opacity: 1,
       adjustments: { ...DEFAULT_ADJUSTMENTS },
     });
-  }, [groups, doc.width, zoom, addObject]);
+  }, [addObject]);
 
   // ── Confirm inset creation ────────────────────────────────────────────
   const confirmInset = useCallback(async () => {

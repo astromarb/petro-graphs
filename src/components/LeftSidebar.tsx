@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback, useEffect } from 'react';
+import React, { useRef, useState, useCallback } from 'react';
 import { Plus, FolderOpen, ChevronDown, ChevronRight, X, Trash2, Upload, FileImage, ArrowLeftRight } from 'lucide-react';
 import { useStore } from '../store';
 import type { ImageGroup, ThinSectionImage, ImageMode } from '../types';
@@ -88,23 +88,6 @@ function GroupCard({ group }: { group: ImageGroup }) {
   const { toggleGroupExpanded, updateGroup, removeGroup, addImageToGroup } = useStore();
   const fileRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [editName, setEditName] = useState(false);
-  const [nameVal, setNameVal]   = useState(group.name);
-
-  // Keep nameVal in sync when group.name changes externally (e.g., from another render)
-  useEffect(() => {
-    if (!editName) setNameVal(group.name);
-  }, [group.name, editName]);
-
-  const saveName = () => {
-    const trimmed = nameVal.trim();
-    if (trimmed && trimmed !== group.name) {
-      updateGroup(group.id, { name: trimmed });
-    } else {
-      setNameVal(group.name); // revert if empty or unchanged
-    }
-    setEditName(false);
-  };
 
   const processFiles = useCallback(async (files: FileList | File[]) => {
     for (const file of Array.from(files)) {
@@ -145,34 +128,14 @@ function GroupCard({ group }: { group: ImageGroup }) {
           {group.expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         </span>
 
-        {editName ? (
-          <input
-            className="input"
-            style={{ flex: 1, fontSize: 11, padding: '3px 6px' }}
-            value={nameVal}
-            onChange={e => setNameVal(e.target.value)}
-            onBlur={saveName}
-            onKeyDown={e => {
-              e.stopPropagation();
-              if (e.key === 'Enter')  saveName();
-              if (e.key === 'Escape') { setNameVal(group.name); setEditName(false); }
-            }}
-            onClick={e => e.stopPropagation()}
-            autoFocus
-          />
-        ) : (
-          <span
-            style={{
-              flex: 1, fontSize: 12, fontWeight: 500, color: 'var(--text-primary)',
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-              cursor: 'text',
-            }}
-            onDoubleClick={e => { e.stopPropagation(); setEditName(true); }}
-            title="Double-click to rename"
-          >
-            {group.name}
-          </span>
-        )}
+        <span
+          style={{
+            flex: 1, fontSize: 12, fontWeight: 500, color: 'var(--text-primary)',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}
+        >
+          {group.name}
+        </span>
 
         <span style={{ fontSize: 10, color: 'var(--text-muted)', flexShrink: 0 }}>
           {group.images.length}
@@ -190,6 +153,15 @@ function GroupCard({ group }: { group: ImageGroup }) {
       {/* Body */}
       {group.expanded && (
         <div style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 7 }}>
+          <div>
+            <div className="input-label">Group name</div>
+            <input
+              className="input"
+              value={group.name}
+              onChange={e => updateGroup(group.id, { name: e.target.value || 'Untitled Group' })}
+              style={{ fontSize: 11 }}
+            />
+          </div>
           <input
             className="input"
             placeholder="Sample ID / label"
