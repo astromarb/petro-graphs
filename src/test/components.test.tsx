@@ -183,13 +183,14 @@ describe('Topbar', () => {
     expect(undo).not.toBeDisabled();
   });
 
-  it('all six tool buttons are rendered', async () => {
+  it('all tool buttons are rendered', async () => {
     const { default: Topbar } = await import('../components/Topbar');
     render(<Topbar />);
-    // Tool titles from TOOLS array
-    ['Select', 'Pan', 'Text', 'Shape', 'Scale Bar', 'Inset'].forEach(label => {
+    ['Pan', 'Text', 'Shape', 'Scale Bar', 'Inset'].forEach(label => {
       expect(screen.getByTitle(new RegExp(label, 'i'))).toBeInTheDocument();
     });
+    // "Select" may match multiple elements; verify at least one exists
+    expect(screen.getAllByTitle(/select/i).length).toBeGreaterThan(0);
   });
 
   it('clicking a tool button activates it in the store', async () => {

@@ -9,10 +9,9 @@ import {
 import { useStore } from '../store';
 import type {
   CanvasObject, ImageObject, TextObject, ShapeObject, ScaleBarObject,
-  BorderStyle, ImageAdjustments, ScaleBarObject as SBO,
+  BorderStyle, ImageAdjustments, ScaleBarObject as SBO, TextStyle,
 } from '../types';
-// ScaleUnit referenced via ScaleBarObject['unit'] below
-import { DEFAULT_ADJUSTMENTS } from '../types';
+import { DEFAULT_ADJUSTMENTS, TEXT_STYLE_PRESETS } from '../types';
 import { BORDER_COLORS as COLORS, niceScaleBar, UNIT_METERS, convertUnit } from '../utils';
 import { nanoid } from '../utils';
 import { Ruler } from 'lucide-react';
@@ -340,21 +339,54 @@ function ImagePanel({ obj, update }: { obj: ImageObject; update: (p: Partial<Ima
 
 // ── Text object panel ────────────────────────────────────────────────────
 function TextPanel({ obj, update }: { obj: TextObject; update: (p: Partial<TextObject>) => void }) {
+  const applyStyle = (s: TextStyle) => {
+    if (s === 'custom') { update({ textStyle: 'custom' }); return; }
+    const p = TEXT_STYLE_PRESETS[s];
+    update({ textStyle: s, fontSize: p.fontSize, fontWeight: p.fontWeight });
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+
+      {/* Text style presets */}
+      <div>
+        <div className="input-label">Style</div>
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+          {(Object.keys(TEXT_STYLE_PRESETS) as TextStyle[]).map(s => {
+            const p = TEXT_STYLE_PRESETS[s];
+            const active = (obj.textStyle ?? 'custom') === s;
+            return (
+              <button key={s}
+                className="btn btn-ghost"
+                style={{
+                  fontSize: 11, padding: '3px 8px',
+                  background: active ? 'var(--accent-glow)' : undefined,
+                  borderColor: active ? 'var(--accent)' : undefined,
+                  color: active ? 'var(--accent)' : undefined,
+                  fontWeight: p.fontWeight,
+                }}
+                onClick={() => applyStyle(s)}
+              >
+                {p.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       <div>
         <div className="input-label" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span>LaTeX expression</span>
+          <span>{obj.isLatex ? 'LaTeX expression' : 'Text content'}</span>
           <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>
             <input type="checkbox" checked={obj.isLatex} onChange={e => update({ isLatex: e.target.checked })} />
-            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>LaTeX mode</span>
+            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>LaTeX</span>
           </label>
         </div>
         <textarea
           className="textarea"
           value={obj.content}
           onChange={e => update({ content: e.target.value })}
-          placeholder={obj.isLatex ? '\\text{My label}\nor: \\frac{SiO_2}{Al_2O_3}' : 'Plain text'}
+          placeholder={obj.isLatex ? '\\text{My label}\nor: \\frac{SiO_2}{Al_2O_3}' : 'Plain text content'}
           rows={3}
         />
       </div>
@@ -372,7 +404,7 @@ function TextPanel({ obj, update }: { obj: TextObject; update: (p: Partial<TextO
           <span style={{ color: 'var(--text-primary)' }}>{obj.fontSize}px</span>
         </div>
         <input type="range" min={8} max={96} value={obj.fontSize}
-          onChange={e => update({ fontSize: +e.target.value })} style={{ width: '100%' }} />
+          onChange={e => update({ fontSize: +e.target.value, textStyle: 'custom' })} style={{ width: '100%' }} />
       </div>
 
       <div>
@@ -405,7 +437,7 @@ function TextPanel({ obj, update }: { obj: TextObject; update: (p: Partial<TextO
         <div className="segmented">
           {(['normal','bold'] as const).map(w => (
             <button key={w} className={`segmented-btn${obj.fontWeight === w ? ' active' : ''}`}
-              onClick={() => update({ fontWeight: w })}>
+              onClick={() => update({ fontWeight: w, textStyle: 'custom' })}>
               {w}
             </button>
           ))}

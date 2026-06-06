@@ -78,6 +78,17 @@ export interface ImageObject extends CanvasObjectBase {
   adjustments: ImageAdjustments;
 }
 
+export type TextStyle = 'h1' | 'h2' | 'h3' | 'body' | 'caption' | 'custom';
+
+export const TEXT_STYLE_PRESETS: Record<TextStyle, { fontSize: number; fontWeight: 'normal' | 'bold'; label: string }> = {
+  h1:      { fontSize: 36, fontWeight: 'bold',   label: 'Heading 1' },
+  h2:      { fontSize: 28, fontWeight: 'bold',   label: 'Heading 2' },
+  h3:      { fontSize: 22, fontWeight: 'bold',   label: 'Heading 3' },
+  body:    { fontSize: 14, fontWeight: 'normal', label: 'Body' },
+  caption: { fontSize: 11, fontWeight: 'normal', label: 'Caption' },
+  custom:  { fontSize: 16, fontWeight: 'normal', label: 'Custom' },
+};
+
 export interface TextObject extends CanvasObjectBase {
   type: 'text';
   content: string;
@@ -86,6 +97,7 @@ export interface TextObject extends CanvasObjectBase {
   color: string;
   fontWeight: 'normal' | 'bold';
   align: 'left' | 'center' | 'right';
+  textStyle?: TextStyle;
 }
 
 export interface ShapeObject extends CanvasObjectBase {

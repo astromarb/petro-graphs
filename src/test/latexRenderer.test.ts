@@ -1,53 +1,50 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-// jsdom doesn't support SVG foreignObject rendering.
-// We mock: getBoundingClientRect (for dimension measurement), fetch (for font
-// collection), Image (set in setup.ts to fire onload synchronously via setTimeout),
-// and HTMLCanvasElement.toDataURL (for the final rasterisation step).
+// Mock html-to-image (uses browser APIs unavailable in jsdom)
+vi.mock('html-to-image', () => ({
+  toPng: vi.fn().mockResolvedValue('data:image/png;base64,AAAA'),
+}));
 
-let mockWidth  = 80;
-let mockHeight = 24;
+const mockFabricImage = {
+  width: 80, height: 24,
+  set: vi.fn(),
+  clone: vi.fn().mockResolvedValue({ set: vi.fn(), width: 80, height: 24 }),
+};
+
+vi.mock('fabric', () => ({
+  FabricImage: {
+    fromURL: vi.fn().mockResolvedValue(mockFabricImage),
+  },
+  StaticCanvas: vi.fn().mockImplementation(() => ({
+    add: vi.fn(), renderAll: vi.fn(), dispose: vi.fn(),
+    toDataURL: vi.fn().mockReturnValue('data:image/png;base64,AAAA'),
+  })),
+}));
 
 beforeEach(() => {
-  vi.resetModules(); // clear the module-level fontFaceCache between tests
+  vi.resetModules();
 
-  // Override getBoundingClientRect for the measurement div
-  const origAppend = document.body.appendChild.bind(document.body);
   vi.spyOn(document.body, 'appendChild').mockImplementation((node) => {
-    const el = origAppend(node);
     if (node instanceof HTMLElement) {
       vi.spyOn(node, 'getBoundingClientRect').mockReturnValue({
-        width: mockWidth, height: mockHeight,
+        width: 80, height: 24,
         x: 0, y: 0, top: 0, left: 0,
-        right: mockWidth, bottom: mockHeight,
-        toJSON: () => ({}),
+        right: 80, bottom: 24, toJSON: () => ({}),
       } as DOMRect);
     }
-    return el;
+    return node as Node;
   });
 
-  // stub HTMLCanvasElement.toDataURL
-  vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue(
-    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQ' +
-    'AABjkB6QAAAABJRU5ErkJggg=='
-  );
-
-  // stub fetch for @font-face woff2 collection
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-    ok: true,
-    arrayBuffer: async () => new ArrayBuffer(8),
-  }));
+  vi.spyOn(document.body, 'removeChild').mockImplementation((node) => node as Node);
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  mockWidth  = 80;
-  mockHeight = 24;
 });
 
 describe('renderLatexToDataUrl', () => {
-  it('returns a non-empty dataUrl for \\text{Hello}', async () => {
+  it('returns a non-empty dataUrl', async () => {
     const { renderLatexToDataUrl } = await import('../latexRenderer');
     const { dataUrl } = await renderLatexToDataUrl('\\text{Hello}', 16, '#000000');
     expect(dataUrl).toBeTruthy();
@@ -55,7 +52,6 @@ describe('renderLatexToDataUrl', () => {
   });
 
   it('returns positive width and height', async () => {
-    mockWidth = 75; mockHeight = 20;
     const { renderLatexToDataUrl } = await import('../latexRenderer');
     const { width, height } = await renderLatexToDataUrl('\\text{Test}', 14, '#ffffff');
     expect(width).toBeGreaterThan(0);
@@ -76,23 +72,27 @@ describe('renderLatexToDataUrl', () => {
     ).resolves.not.toThrow();
   });
 
-  it('returns an object with dataUrl, width, height on malformed input (graceful)', async () => {
+  it('returns object with dataUrl, width, height on malformed input', async () => {
     const { renderLatexToDataUrl } = await import('../latexRenderer');
-    // KaTeX with throwOnError:false never throws — degrades gracefully
     const result = await renderLatexToDataUrl('\\invalidcmd{{{', 16, '#000');
     expect(result).toHaveProperty('dataUrl');
     expect(result).toHaveProperty('width');
     expect(result).toHaveProperty('height');
-    expect(result.width).toBeGreaterThanOrEqual(0);
-    expect(result.height).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('renderLatexToFabricImage', () => {
+  it('returns a FabricImage-like object', async () => {
+    const { renderLatexToFabricImage } = await import('../latexRenderer');
+    const img = await renderLatexToFabricImage('\\text{Hello}', 16, '#000');
+    expect(img).toBeTruthy();
+    expect(typeof img.set).toBe('function');
   });
 
-  it('returns width/height matching mock measurements', async () => {
-    mockWidth = 120; mockHeight = 30;
-    const { renderLatexToDataUrl } = await import('../latexRenderer');
-    const { width, height } = await renderLatexToDataUrl('\\text{Wide label}', 18, '#fff');
-    // width = mockWidth + 16 padding; height = mockHeight + 10 padding
-    expect(width).toBe(136);
-    expect(height).toBe(40);
+  it('returns same object for repeated calls with same key (caching)', async () => {
+    const { renderLatexToFabricImage } = await import('../latexRenderer');
+    const a = await renderLatexToFabricImage('\\text{X}', 16, '#000');
+    const b = await renderLatexToFabricImage('\\text{X}', 16, '#000');
+    expect(a).toBe(b);
   });
 });

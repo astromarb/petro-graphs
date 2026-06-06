@@ -7,7 +7,8 @@ import type {
 } from '../types';
 import { DEFAULT_ADJUSTMENTS } from '../types';
 import { nanoid, niceScaleBar, UNIT_METERS } from '../utils';
-import { renderLatexToFabricImage } from '../latexRenderer';
+import { renderLatexToFabricImage, renderLatexToDataUrl } from '../latexRenderer';
+import { sharedFabricRef } from '../fabricRef';
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -47,7 +48,23 @@ function applyBorder(fObj: fabric.FabricObject, b: BorderStyle) {
     strokeWidth: b.style === 'none' ? 0 : b.width,
     strokeDashArray: borderToDash(b.style, b.width),
   });
-  if ('rx' in fObj) (fObj as fabric.Rect).set({ rx: b.radius, ry: b.radius });
+  if ('rx' in fObj) {
+    (fObj as fabric.Rect).set({ rx: b.radius, ry: b.radius });
+  } else if (fObj instanceof fabric.FabricImage && b.radius > 0) {
+    // FabricImage doesn't have rx/ry — use a clipPath rect
+    const w = (fObj.width  ?? 100) * (fObj.scaleX ?? 1);
+    const h = (fObj.height ?? 100) * (fObj.scaleY ?? 1);
+    fObj.clipPath = new fabric.Rect({
+      width: fObj.width ?? 100,
+      height: fObj.height ?? 100,
+      rx: b.radius / (fObj.scaleX ?? 1),
+      ry: b.radius / (fObj.scaleY ?? 1),
+      originX: 'center', originY: 'center',
+    });
+    void w; void h;
+  } else if (fObj instanceof fabric.FabricImage) {
+    fObj.clipPath = undefined;
+  }
 }
 
 async function cropDataUrl(
@@ -76,6 +93,73 @@ function getScenePt(fc: fabric.Canvas, options: fabric.TEvent): fabric.Point | n
 
 
 
+// ── Ruler overlay ─────────────────────────────────────────────────────────
+
+function RulerOverlay({
+  orientation, size, zoom, dpi, docSize,
+}: {
+  orientation: 'horizontal' | 'vertical';
+  size: number;
+  zoom: number;
+  dpi: number;
+  docSize: number;
+}) {
+  const isH = orientation === 'horizontal';
+  const RULER_SIZE = 18;
+
+  // Figure out a nice tick spacing in document pixels
+  const pxPerInch = dpi * zoom;
+  const candidates = [10, 25, 50, 100, 200, 250, 500, 1000];
+  const minSpacingPx = 40; // minimum pixel gap between labels
+  const tickDocPx = candidates.find(c => c * zoom >= minSpacingPx) ?? 1000;
+
+  const ticks: { pos: number; label: string }[] = [];
+  for (let docPx = 0; docPx <= docSize; docPx += tickDocPx) {
+    const pos = docPx * zoom;
+    const label = dpi >= 72 ? `${Math.round(docPx / (dpi / 72))}` : `${docPx}`;
+    void label;
+    ticks.push({ pos, label: `${docPx}` });
+  }
+
+  void pxPerInch;
+
+  const containerStyle: React.CSSProperties = isH
+    ? { position: 'absolute', top: -RULER_SIZE, left: 0, width: size, height: RULER_SIZE, pointerEvents: 'none', zIndex: 10 }
+    : { position: 'absolute', top: 0, left: -RULER_SIZE, width: RULER_SIZE, height: size, pointerEvents: 'none', zIndex: 10 };
+
+  return (
+    <div style={{
+      ...containerStyle,
+      background: 'rgba(20,20,28,0.88)',
+      border: '1px solid rgba(255,255,255,0.08)',
+      overflow: 'hidden',
+    }}>
+      {ticks.map(({ pos, label }) => (
+        <div key={pos} style={{
+          position: 'absolute',
+          ...(isH
+            ? { left: pos, top: 0, width: 1, height: RULER_SIZE }
+            : { top: pos, left: 0, width: RULER_SIZE, height: 1 }),
+          background: 'rgba(255,255,255,0.25)',
+        }}>
+          <span style={{
+            position: 'absolute',
+            fontSize: 8,
+            color: 'rgba(255,255,255,0.5)',
+            userSelect: 'none',
+            ...(isH
+              ? { left: 2, top: 2, whiteSpace: 'nowrap' }
+              : { left: 2, top: 2, whiteSpace: 'nowrap', writingMode: 'vertical-rl', transform: 'rotate(180deg)' }),
+          }}>
+            {label}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+
 // ── Component ─────────────────────────────────────────────────────────────
 
 export default function CanvasArea() {
@@ -85,10 +169,10 @@ export default function CanvasArea() {
 
   const {
     doc, groups, addObject, setSelectedId,
-    tool, zoom, setZoom, setPan,
+    tool, setTool, zoom, setZoom, setPan,
     insets, addInset,
     addImageToGroup,
-    selectedId,
+    selectedId, showRulers,
   } = useStore();
 
   // Compute whether the currently selected object is a calibrated image
@@ -124,6 +208,9 @@ export default function CanvasArea() {
   // ── Connector lines: pairId → {line, indicator} ──────────────────────
   const connectorMapRef = useRef<Map<string, { line: fabric.Line; indicator: fabric.Rect }>>(new Map());
 
+  // ── Mode tag labels: storeId → fabric.Text ───────────────────────────
+  const modeTagMapRef = useRef<Map<string, fabric.Text>>(new Map());
+
   // ── Refs to latest values (used in stable fabric event handlers) ──────
   const toolRef = useRef(tool);
   useEffect(() => { toolRef.current = tool; }, [tool]);
@@ -143,6 +230,16 @@ export default function CanvasArea() {
   const scalebarPhaseRef = useRef(scalebarPhase);
   useEffect(() => { scalebarPhaseRef.current = scalebarPhase; }, [scalebarPhase]);
 
+  // temp-pan: tool overridden by spacebar hold
+  const prevToolRef = useRef<typeof tool | null>(null);
+
+  // Guard: prevent double-placement from mousedown+mouseup both firing
+  const justPlacedRef = useRef(false);
+
+  // Keep setTool in a ref so fabric event handlers can call it
+  const setToolRef = useRef(setTool);
+  useEffect(() => { setToolRef.current = setTool; }, [setTool]);
+
   // ── Initialize Fabric canvas (once) ──────────────────────────────────
   useEffect(() => {
     if (!canvasElRef.current) return;
@@ -152,6 +249,7 @@ export default function CanvasArea() {
       preserveObjectStacking: true,
     });
     fabricRef.current = fc;
+    sharedFabricRef.current = fc;
 
     fc.on('selection:created', () => {
       const sel = fc.getActiveObject() as fabric.FabricObject & { storeId?: string };
@@ -261,6 +359,9 @@ export default function CanvasArea() {
 
       if (!['text', 'shape', 'inset'].includes(currentTool)) return;
 
+      // Guard: ignore if we just placed an object in this same click cycle
+      if (justPlacedRef.current) { justPlacedRef.current = false; return; }
+
       const target = options.target as (fabric.FabricObject & { storeId?: string }) | null;
       const pt = getScenePt(fc, options);
       if (!pt) return;
@@ -307,23 +408,31 @@ export default function CanvasArea() {
       const state = useStore.getState();
 
       if (currentTool === 'text') {
+        const newId = nanoid();
         state.addObject({
-          id: nanoid(), type: 'text',
-          content: '\\text{Label}', isLatex: true,
+          id: newId, type: 'text',
+          content: 'Label', isLatex: false,
           x: cx, y: cy, width: 200, height: 40, rotation: 0,
           locked: false, visible: true, label: 'Text',
           fontSize: 16, color: '#000000', fontWeight: 'normal', align: 'left',
         });
+        // Auto-return to select so next click selects rather than places
+        setToolRef.current('select');
+        // Select the newly placed object after fabric sync
+        setTimeout(() => setSelectedIdRef.current(newId), 50);
       }
 
       if (currentTool === 'shape') {
+        const newId = nanoid();
         state.addObject({
-          id: nanoid(), type: 'shape', shape: 'rect',
+          id: newId, type: 'shape', shape: 'rect',
           x: cx - 60, y: cy - 40, width: 120, height: 80, rotation: 0,
           locked: false, visible: true, label: 'Shape',
           fill: '#aa3bff', fillOpacity: 0,
           border: { color: '#aa3bff', width: 2, style: 'solid', radius: 4 },
         });
+        setToolRef.current('select');
+        setTimeout(() => setSelectedIdRef.current(newId), 50);
       }
     });
 
@@ -423,6 +532,44 @@ export default function CanvasArea() {
     };
   }, []);
 
+  // ── Spacebar hold = temporary pan (works in any tool mode) ──────────
+  useEffect(() => {
+    const onDown = (e: KeyboardEvent) => {
+      if (e.code !== 'Space' || e.repeat) return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return;
+      e.preventDefault();
+      if (prevToolRef.current !== null) return; // already in temp-pan
+      prevToolRef.current = toolRef.current;
+      toolRef.current = 'pan';
+      const fc = fabricRef.current;
+      if (fc) { fc.defaultCursor = 'grab'; fc.selection = false; }
+    };
+    const onUp = (e: KeyboardEvent) => {
+      if (e.code !== 'Space') return;
+      if (prevToolRef.current === null) return;
+      const restore = prevToolRef.current;
+      prevToolRef.current = null;
+      toolRef.current = restore;
+      const fc = fabricRef.current;
+      if (!fc) return;
+      if      (restore === 'pan')   { fc.defaultCursor = 'grab'; fc.selection = false; }
+      else if (['text','shape','scalebar','inset'].includes(restore))
+                                    { fc.defaultCursor = 'crosshair'; fc.selection = false; }
+      else                          { fc.defaultCursor = 'default'; fc.selection = true; }
+      fc.getObjects().forEach(o => {
+        if (o === cropRectRef.current) return;
+        (o as fabric.FabricObject).selectable = restore === 'select';
+      });
+    };
+    window.addEventListener('keydown', onDown);
+    window.addEventListener('keyup',   onUp);
+    return () => {
+      window.removeEventListener('keydown', onDown);
+      window.removeEventListener('keyup',   onUp);
+    };
+  }, []);
+
   // ── Scroll-to-zoom (plain scroll on canvas area) ─────────────────────
   useEffect(() => {
     const el = wrapRef.current;
@@ -473,6 +620,51 @@ export default function CanvasArea() {
         createFabricObject(obj, groups, fc, objMapRef.current);
       }
     });
+
+    // ── Mode tag overlay ──────────────────────────────────────────────
+    const liveTagIds = new Set<string>();
+    doc.objects.forEach(obj => {
+      if (obj.type !== 'image') return;
+      const o = obj as ImageObject;
+      if (!o.showModeTag) {
+        // Remove tag if it exists
+        const existing = modeTagMapRef.current.get(obj.id);
+        if (existing) { fc.remove(existing); modeTagMapRef.current.delete(obj.id); }
+        return;
+      }
+      liveTagIds.add(obj.id);
+      const tagText  = o.mode;
+      const pad = 4;
+      const fSize = 11;
+      const tagW = tagText.length * fSize * 0.65 + pad * 2;
+      const tagH = fSize + pad * 2;
+      const tp = o.tagPosition ?? 'tl';
+      const tx = tp === 'tl' || tp === 'bl' ? o.x + pad : o.x + o.width - tagW - pad;
+      const ty = tp === 'tl' || tp === 'tr' ? o.y + pad : o.y + o.height - tagH - pad;
+      const existing = modeTagMapRef.current.get(obj.id);
+      if (existing) {
+        existing.set({ left: tx, top: ty, text: tagText });
+        existing.setCoords();
+      } else {
+        const tag = new fabric.Text(tagText, {
+          left: tx, top: ty,
+          fontSize: fSize,
+          fontWeight: 'bold',
+          fontFamily: 'Inter, system-ui, sans-serif',
+          fill: '#ffffff',
+          backgroundColor: 'rgba(0,0,0,0.55)',
+          padding: pad,
+          selectable: false,
+          evented: false,
+        });
+        fc.add(tag);
+        modeTagMapRef.current.set(obj.id, tag);
+      }
+    });
+    // Remove tags for deleted/hidden objects
+    for (const [id, tag] of modeTagMapRef.current) {
+      if (!liveTagIds.has(id)) { fc.remove(tag); modeTagMapRef.current.delete(id); }
+    }
 
     fc.renderAll();
   }, [doc.objects, groups]);
@@ -772,6 +964,14 @@ export default function CanvasArea() {
         outline: '1px solid rgba(255,255,255,0.06)',
       }}>
         <canvas ref={canvasElRef} />
+
+        {/* Rulers */}
+        {showRulers && (
+          <>
+            <RulerOverlay orientation="horizontal" size={Math.round(doc.width * zoom)} zoom={zoom} dpi={doc.dpi} docSize={doc.width} />
+            <RulerOverlay orientation="vertical"   size={Math.round(doc.height * zoom)} zoom={zoom} dpi={doc.dpi} docSize={doc.height} />
+          </>
+        )}
       </div>
 
       {/* Status bar */}
