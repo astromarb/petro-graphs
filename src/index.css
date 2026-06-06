@@ -2,10 +2,16 @@
 @import "katex/dist/katex.min.css";
 
 :root {
+  color-scheme: dark;
+
   --bg-base: #0f1117;
   --bg-surface: #161b26;
   --bg-raised: #1d2433;
   --bg-overlay: #242a38;
+
+  /* Semantic aliases used by modal/panel components */
+  --surface:   #161b26;
+  --surface-2: #1d2433;
   --border: #2d3548;
   --border-muted: #1e2535;
   --accent: #aa3bff;

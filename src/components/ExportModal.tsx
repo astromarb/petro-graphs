@@ -72,15 +72,17 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
       const safeTitle = doc.title.replace(/[^a-z0-9_-]/gi, '_') || 'figure';
 
       if (format === 'pdf') {
-        // Determine page orientation
-        const landscape = outW > outH;
+        // Physical page size in PDF points (1 pt = 1/72 inch).
+        // Always derived from the document's own DPI so the page is the
+        // correct physical size regardless of the chosen export resolution.
+        const ptW = doc.width  * 72 / doc.dpi;
+        const ptH = doc.height * 72 / doc.dpi;
         const pdf = new jsPDF({
-          orientation: landscape ? 'landscape' : 'portrait',
-          unit: 'px',
-          format: [outW, outH],
-          hotfixes: ['px_scaling'],
+          orientation: ptW > ptH ? 'landscape' : 'portrait',
+          unit: 'pt',
+          format: [ptW, ptH],
         });
-        pdf.addImage(dataUrl, 'PNG', 0, 0, outW, outH);
+        pdf.addImage(dataUrl, 'PNG', 0, 0, ptW, ptH);
         pdf.save(`${safeTitle}.pdf`);
       } else {
         const a = document.createElement('a');

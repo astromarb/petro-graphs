@@ -50,54 +50,57 @@ export default function GridLayoutModal({ onClose }: Props) {
     setOrder(arr);
   };
 
+  // Cell size is determined by how much canvas space is available, not by image size.
+  // This ensures the grid always fits within the canvas regardless of image dimensions.
   const preview = useMemo(() => {
-    const rows = Math.ceil(orderedImages.length / cols);
-    const cellW = Math.max(...orderedImages.map(o => o.width));
-    const cellH = Math.max(...orderedImages.map(o => o.height));
+    const rows = Math.ceil(Math.max(1, orderedImages.length) / cols);
+    const usableW = doc.width  - 2 * margin - Math.max(0, cols - 1) * gap;
+    const usableH = doc.height - 2 * margin - Math.max(0, rows - 1) * gap;
+    const cellW = Math.max(1, Math.floor(usableW / cols));
+    const cellH = Math.max(1, Math.floor(usableH / rows));
     return { rows, cellW, cellH };
-  }, [orderedImages, cols]);
-
-  const totalW = margin * 2 + cols * preview.cellW + (cols - 1) * gap;
-  const totalH = margin * 2 + preview.rows * preview.cellH + (preview.rows - 1) * gap;
+  }, [orderedImages.length, cols, gap, margin, doc.width, doc.height]);
 
   const apply = () => {
     const { cellW, cellH } = preview;
     const updates: { id: string; patch: Partial<CanvasObject> }[] = [];
+    const placements: { x: number; y: number; w: number; h: number }[] = [];
 
     orderedImages.forEach((obj, idx) => {
       const col = idx % cols;
       const row = Math.floor(idx / cols);
-      const x = margin + col * (cellW + gap);
-      const y = margin + row * (cellH + gap);
-      // Center image within cell (preserve aspect ratio, don't resize)
-      const cx = x + (cellW  - obj.width)  / 2;
-      const cy = y + (cellH  - obj.height) / 2;
-      updates.push({ id: obj.id, patch: { x: Math.round(cx), y: Math.round(cy) } });
+
+      // Scale image to fit within cell preserving aspect ratio; never upscale.
+      const scale = Math.min(1, cellW / obj.width, cellH / obj.height);
+      const newW  = Math.round(obj.width  * scale);
+      const newH  = Math.round(obj.height * scale);
+
+      // Center the scaled image inside its cell
+      const cellX = margin + col * (cellW + gap);
+      const cellY = margin + row * (cellH + gap);
+      const x = Math.round(cellX + (cellW - newW) / 2);
+      const y = Math.round(cellY + (cellH - newH) / 2);
+
+      updates.push({ id: obj.id, patch: { x, y, width: newW, height: newH } });
+      placements.push({ x, y, w: newW, h: newH });
     });
 
     batchUpdateObjects(updates);
 
     if (addLabels) {
       const chars = LABEL_STYLES.find(s => s.id === labelStyle)!.chars;
-      orderedImages.forEach((obj, idx) => {
+      orderedImages.forEach((_obj, idx) => {
         const lbl = chars[idx] ?? String(idx + 1);
-        const col = idx % cols;
-        const row = Math.floor(idx / cols);
-        const cellX = margin + col * (cellW + gap);
-        const cellY = margin + row * (cellH + gap);
-        const cx = updates[idx].patch.x!;
-        const cy = updates[idx].patch.y!;
+        const { x: px, y: py, w: pw, h: ph } = placements[idx];
         const pad = 6;
         let lx: number, ly: number;
-        if (labelPos === 'tl') { lx = cx + pad; ly = cy + pad; }
-        else if (labelPos === 'tr') { lx = cx + obj.width  - labelSize - pad; ly = cy + pad; }
-        else if (labelPos === 'bl') { lx = cx + pad; ly = cy + obj.height - labelSize - pad; }
-        else { lx = cx + obj.width - labelSize - pad; ly = cy + obj.height - labelSize - pad; }
-        void cellX; void cellY;
+        if      (labelPos === 'tl') { lx = px + pad;                  ly = py + pad; }
+        else if (labelPos === 'tr') { lx = px + pw - labelSize - pad;  ly = py + pad; }
+        else if (labelPos === 'bl') { lx = px + pad;                  ly = py + ph - labelSize - pad; }
+        else                        { lx = px + pw - labelSize - pad;  ly = py + ph - labelSize - pad; }
         const textObj: TextObject = {
           id: nanoid(), type: 'text',
-          content: lbl,
-          isLatex: false,
+          content: lbl, isLatex: false,
           x: Math.round(lx), y: Math.round(ly),
           width: labelSize * 2, height: labelSize + 4,
           rotation: 0, locked: false, visible: true,
@@ -193,7 +196,7 @@ export default function GridLayoutModal({ onClose }: Props) {
             </div>
 
             <div style={{ fontSize: 11, color: 'var(--text-muted)', padding: '4px 6px', background: 'var(--surface)', borderRadius: 4, border: '1px solid var(--border)' }}>
-              Grid: {preview.rows} × {cols} · {totalW} × {totalH} px total
+              Grid: {preview.rows} × {cols} · cell {preview.cellW} × {preview.cellH} px
             </div>
 
             {/* Panel labels */}

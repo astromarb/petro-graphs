@@ -262,41 +262,6 @@ function ImagePanel({ obj, update, dpi }: { obj: ImageObject; update: (p: Partia
         </div>
       </Section>
 
-      <Section title="Mode Tag" defaultOpen={false}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span className="input-label" style={{ margin: 0 }}>Visible</span>
-            <button className="btn btn-ghost" style={{ padding: '3px 8px', fontSize: 11 }}
-              onClick={() => update({ showModeTag: !obj.showModeTag })}>
-              {obj.showModeTag ? 'On' : 'Off'}
-            </button>
-          </div>
-          {obj.showModeTag && (
-            <div>
-              <div className="input-label">Position</div>
-              <div className="segmented">
-                {(['tl','tr','bl','br'] as ImageObject['tagPosition'][]).map(p => (
-                  <button key={p} className={`segmented-btn${obj.tagPosition === p ? ' active' : ''}`}
-                    onClick={() => update({ tagPosition: p })} style={{ fontSize: 10 }}>
-                    {p.toUpperCase()}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-          <div>
-            <div className="input-label">Mode override</div>
-            <div className="segmented">
-              {(['PPL','XPL'] as const).map(m => (
-                <button key={m} className={`segmented-btn${obj.mode === m ? ' active' : ''}`}
-                  onClick={() => update({ mode: m })}>
-                  {m}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      </Section>
 
       <AdjustmentsPanel adj={adj} onChange={patch => update({ adjustments: { ...adj, ...patch } })} />
 

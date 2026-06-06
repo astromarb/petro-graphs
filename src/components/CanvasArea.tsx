@@ -10,6 +10,10 @@ import { nanoid, niceScaleBar, UNIT_METERS, ptToPx } from '../utils';
 import { renderLatexToFabricImage } from '../latexRenderer';
 import { sharedFabricRef } from '../fabricRef';
 
+// Tracks in-flight LaTeX renders: objId → key currently being rendered.
+// Prevents duplicate Fabric images when the user types faster than rendering.
+const latexInFlight = new Map<string, string>();
+
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 function borderToDash(style: BorderStyle['style'], w: number): number[] {
@@ -204,9 +208,6 @@ export default function CanvasArea() {
   // ── Connector lines: pairId → {line, indicator} ──────────────────────
   const connectorMapRef = useRef<Map<string, { line: fabric.Line; indicator: fabric.Rect }>>(new Map());
 
-  // ── Mode tag labels: storeId → fabric.Text ───────────────────────────
-  const modeTagMapRef = useRef<Map<string, fabric.Text>>(new Map());
-
   // ── Refs to latest values (used in stable fabric event handlers) ──────
   const toolRef = useRef(tool);
   useEffect(() => { toolRef.current = tool; }, [tool]);
@@ -275,13 +276,23 @@ export default function CanvasArea() {
       // Scale bar: click-to-place (no drag — always horizontal)
       if (currentTool === 'scalebar') {
         const { selectedId, doc: sd, groups: sg } = useStore.getState();
-        const imgObj = sd.objects.find(o => o.id === selectedId && o.type === 'image') as ImageObject | undefined;
+        const pt = getScenePt(fc, options);
+        if (!pt) return;
+
+        // Prefer the currently-selected image; fall back to a hit-test at the click point.
+        let imgObj = sd.objects.find(o => o.id === selectedId && o.type === 'image') as ImageObject | undefined;
+        if (!imgObj) {
+          imgObj = sd.objects.find(o =>
+            o.type === 'image' &&
+            pt.x >= o.x && pt.x <= o.x + o.width &&
+            pt.y >= o.y && pt.y <= o.y + o.height,
+          ) as ImageObject | undefined;
+        }
+
         const srcGrp = sg.find(gr => gr.id === imgObj?.groupId);
         const srcImg = srcGrp?.images.find(i => i.id === imgObj?.imageId);
         const cal    = srcImg?.calibration;
         if (!imgObj || !srcImg || !cal) return;
-        const pt = getScenePt(fc, options);
-        if (!pt) return;
         const { realLength, unit, canvasPx } = niceScaleBar(srcImg.width, imgObj.width, cal);
         const canvasUnitsPerPx  = cal.unitsPerPixel * (srcImg.width / imgObj.width);
         const metersPerCanvasPx = canvasUnitsPerPx * (UNIT_METERS[cal.unit] ?? 1e-6);
@@ -436,6 +447,7 @@ export default function CanvasArea() {
       fc.selection = true;
     }
     const isSelect = tool === 'select';
+    fc.skipTargetFind = !isSelect; // pan/draw tools must not drag objects
     fc.getObjects().forEach(fObj => {
       if (fObj === cropRectRef.current) return;
       fObj.selectable = isSelect;
@@ -451,7 +463,14 @@ export default function CanvasArea() {
     if (!el) return;
 
     const onDown = (e: MouseEvent) => {
-      if (toolRef.current !== 'pan') return;
+      const isMiddle  = e.button === 1;          // scroll-wheel click
+      const isPanTool = toolRef.current === 'pan';
+      if (!isMiddle && !isPanTool) return;
+      if (isMiddle) {
+        e.preventDefault(); // prevent autoscroll cursor
+        const fc = fabricRef.current;
+        if (fc) fc.skipTargetFind = true;
+      }
       isPanning.current = true;
       lastPan.current = { x: e.clientX, y: e.clientY };
       el.style.cursor = 'grabbing';
@@ -465,8 +484,14 @@ export default function CanvasArea() {
       const t = fc.viewportTransform;
       setPan(-t[4], -t[5]);
     };
-    const onUp = () => {
+    const onUp = (e: MouseEvent) => {
+      if (!isPanning.current) return;
       isPanning.current = false;
+      // If we were middle-mouse panning, restore skipTargetFind to match current tool
+      if (e.button === 1) {
+        const fc = fabricRef.current;
+        if (fc) fc.skipTargetFind = toolRef.current !== 'select';
+      }
       el.style.cursor = toolRef.current === 'pan' ? 'grab' : 'default';
     };
 
@@ -491,7 +516,7 @@ export default function CanvasArea() {
       prevToolRef.current = toolRef.current;
       toolRef.current = 'pan';
       const fc = fabricRef.current;
-      if (fc) { fc.defaultCursor = 'grab'; fc.selection = false; }
+      if (fc) { fc.defaultCursor = 'grab'; fc.selection = false; fc.skipTargetFind = true; }
     };
     const onUp = (e: KeyboardEvent) => {
       if (e.code !== 'Space') return;
@@ -501,10 +526,10 @@ export default function CanvasArea() {
       toolRef.current = restore;
       const fc = fabricRef.current;
       if (!fc) return;
-      if      (restore === 'pan')   { fc.defaultCursor = 'grab'; fc.selection = false; }
+      if      (restore === 'pan')   { fc.defaultCursor = 'grab'; fc.selection = false; fc.skipTargetFind = true; }
       else if (['text','shape','scalebar','inset'].includes(restore))
-                                    { fc.defaultCursor = 'crosshair'; fc.selection = false; }
-      else                          { fc.defaultCursor = 'default'; fc.selection = true; }
+                                    { fc.defaultCursor = 'crosshair'; fc.selection = false; fc.skipTargetFind = true; }
+      else                          { fc.defaultCursor = 'default'; fc.selection = true; fc.skipTargetFind = false; }
       const wasSelect = restore === 'select';
       fc.getObjects().forEach(o => {
         if (o === cropRectRef.current) return;
@@ -560,10 +585,13 @@ export default function CanvasArea() {
           const o = obj as TextObject;
           const newKey = `${o.content}||${o.fontSize}||${o.color}`;
           if (existing._latexKey !== newKey) {
-            fc.remove(existing);
-            objMapRef.current.delete(obj.id);
-            createFabricObject(obj, groups, fc, objMapRef.current);
-            return;
+            // Only kick off a new render if not already rendering this exact key
+            if (latexInFlight.get(obj.id) !== newKey) {
+              fc.remove(existing);
+              objMapRef.current.delete(obj.id);
+              createFabricObject(obj, groups, fc, objMapRef.current);
+            }
+            return; // either waiting for in-flight or just started — don't syncFabricProps
           }
         }
         // Scale bar: recreate when visual properties change
@@ -579,54 +607,10 @@ export default function CanvasArea() {
         }
         syncFabricProps(existing, obj);
       } else {
+        // For LaTeX, createFabricObject itself guards against duplicate in-flight renders
         createFabricObject(obj, groups, fc, objMapRef.current);
       }
     });
-
-    // ── Mode tag overlay ──────────────────────────────────────────────
-    const liveTagIds = new Set<string>();
-    doc.objects.forEach(obj => {
-      if (obj.type !== 'image') return;
-      const o = obj as ImageObject;
-      if (!o.showModeTag) {
-        // Remove tag if it exists
-        const existing = modeTagMapRef.current.get(obj.id);
-        if (existing) { fc.remove(existing); modeTagMapRef.current.delete(obj.id); }
-        return;
-      }
-      liveTagIds.add(obj.id);
-      const tagText  = o.mode;
-      const pad = 4;
-      const fSize = 11;
-      const tagW = tagText.length * fSize * 0.65 + pad * 2;
-      const tagH = fSize + pad * 2;
-      const tp = o.tagPosition ?? 'tl';
-      const tx = tp === 'tl' || tp === 'bl' ? o.x + pad : o.x + o.width - tagW - pad;
-      const ty = tp === 'tl' || tp === 'tr' ? o.y + pad : o.y + o.height - tagH - pad;
-      const existing = modeTagMapRef.current.get(obj.id);
-      if (existing) {
-        existing.set({ left: tx, top: ty, text: tagText });
-        existing.setCoords();
-      } else {
-        const tag = new fabric.Text(tagText, {
-          left: tx, top: ty,
-          fontSize: fSize,
-          fontWeight: 'bold',
-          fontFamily: 'Inter, system-ui, sans-serif',
-          fill: '#ffffff',
-          backgroundColor: 'rgba(0,0,0,0.55)',
-          padding: pad,
-          selectable: false,
-          evented: false,
-        });
-        fc.add(tag);
-        modeTagMapRef.current.set(obj.id, tag);
-      }
-    });
-    // Remove tags for deleted/hidden objects
-    for (const [id, tag] of modeTagMapRef.current) {
-      if (!liveTagIds.has(id)) { fc.remove(tag); modeTagMapRef.current.delete(id); }
-    }
 
     fc.renderAll();
   }, [doc.objects, groups]);
@@ -729,7 +713,7 @@ export default function CanvasArea() {
       height: Math.round(defaultH),
       rotation: 0, locked: false, visible: true, label: img.name,
       border: { color: '#ffffff', width: 2, style: 'solid', radius: 0 },
-      showModeTag: true, tagPosition: 'tl', opacity: 1,
+      showModeTag: false, tagPosition: 'tl', opacity: 1,
       adjustments: { ...DEFAULT_ADJUSTMENTS },
     });
   }, [addObject]);
@@ -979,8 +963,34 @@ function createFabricObject(
       type LatexFabricImage = fabric.FabricImage & {
         storeId: string; _isLatexImg: boolean; _latexKey: string;
       };
+      const renderKey = `${o.content}||${o.fontSize}||${o.color}`;
+      // Guard: skip if an identical render is already in-flight
+      if (latexInFlight.get(obj.id) === renderKey) return;
+      latexInFlight.set(obj.id, renderKey);
+
       renderLatexToFabricImage(o.content, o.fontSize, o.color)
         .then(async (cached) => {
+          // Check if the store content changed while we were rendering
+          const storeState = useStore.getState();
+          const storeObj   = storeState.doc.objects.find(s => s.id === obj.id) as TextObject | undefined;
+          const currentKey = storeObj
+            ? `${storeObj.content}||${storeObj.fontSize}||${storeObj.color}`
+            : null;
+
+          if (currentKey !== renderKey) {
+            // Content changed — restart with the latest content if the object still exists
+            latexInFlight.delete(obj.id);
+            if (storeObj?.isLatex) {
+              createFabricObject(storeObj, storeState.groups, fc, map);
+            }
+            return;
+          }
+
+          latexInFlight.delete(obj.id);
+          // Remove any stale duplicate that another race might have placed
+          const dup = map.get(obj.id);
+          if (dup) fc.remove(dup);
+
           const fImg = await cached.clone() as LatexFabricImage;
           const imgW = fImg.width ?? 100;
           const scale = imgW > 0 ? o.width / imgW : 1;
@@ -992,13 +1002,14 @@ function createFabricObject(
           });
           fImg.storeId    = obj.id;
           fImg._isLatexImg = true;
-          fImg._latexKey  = `${o.content}||${o.fontSize}||${o.color}`;
+          fImg._latexKey  = renderKey;
+          map.set(obj.id, fImg); // set before add to prevent re-entry race
           fc.add(fImg);
-          map.set(obj.id, fImg);
           fc.renderAll();
         })
         .catch(() => {
           // Fallback: plain textbox showing stripped content
+          latexInFlight.delete(obj.id);
           const stripped = o.content.replace(/\\[a-zA-Z]+\{([^}]*)\}/g, '$1').replace(/[\\{}]/g, '');
           const tb = new fabric.Textbox(stripped || o.content, {
             left: o.x, top: o.y, width: o.width,
@@ -1047,7 +1058,7 @@ function createFabricObject(
 
   if (obj.type === 'scalebar') {
     const o = obj as ScaleBarObject;
-    const capH = Math.round(o.thickness * 2.5);
+    const capH = Math.round(o.thickness * 4.5); // taller caps for clear start/end markers
     const capOff = Math.round((capH - o.thickness) / 2);
 
     const bar = new fabric.Rect({
