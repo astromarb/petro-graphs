@@ -606,7 +606,11 @@ export default function CanvasArea() {
       )}
 
       {/* Fabric canvas */}
-      <div style={{ position: 'relative', boxShadow: '0 8px 40px rgba(0,0,0,0.6)', flexShrink: 0 }}>
+      <div style={{
+        position: 'relative', flexShrink: 0,
+        boxShadow: '0 0 0 1px rgba(255,255,255,0.08), 0 12px 48px rgba(0,0,0,0.7)',
+        outline: '1px solid rgba(255,255,255,0.06)',
+      }}>
         <canvas ref={canvasElRef} />
       </div>
 
