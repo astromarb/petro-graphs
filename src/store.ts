@@ -1,8 +1,34 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
+import { get as idbGet, set as idbSet } from 'idb-keyval';
 import type {
   CanvasDoc, CanvasObject, ImageGroup, ThinSectionImage, Tool, InsetPair, ImageCalibration,
 } from './types';
+
+// ── Persistence ────────────────────────────────────────────────────────────
+const IDB_KEY = 'petrofigure-state-v1';
+
+interface PersistedState {
+  doc:    CanvasDoc;
+  groups: ImageGroup[];
+  insets: InsetPair[];
+}
+
+/** Save serialisable state to IndexedDB (fire-and-forget). */
+function persist(state: PersistedState) {
+  if (typeof indexedDB === 'undefined') return; // jsdom / SSR guard
+  idbSet(IDB_KEY, JSON.parse(JSON.stringify(state))).catch(() => {/* quota/private mode */});
+}
+
+/** Load previously saved state from IndexedDB. Returns null on first run or error. */
+export async function loadPersistedState(): Promise<PersistedState | null> {
+  try {
+    const saved = await idbGet<PersistedState>(IDB_KEY);
+    return saved ?? null;
+  } catch {
+    return null;
+  }
+}
 
 type Snapshot = { objects: CanvasObject[]; insets: InsetPair[] };
 
@@ -85,6 +111,9 @@ export interface AppState {
   toggleLayersPanel:    () => void;
   showRulers:           boolean;
   toggleRulers:         () => void;
+
+  /** Restore state from IndexedDB on app startup */
+  rehydrate: (saved: PersistedState) => void;
 }
 
 const defaultDoc: CanvasDoc = {
@@ -114,27 +143,44 @@ export const useStore = create<AppState>()(
       if (!g) return;
       const img = g.images.find(i => i.id === imageId);
       if (img) img.calibration = cal;
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
+    }),
+
+    rehydrate: (saved) => set((s) => {
+      s.doc    = saved.doc    as typeof s.doc;
+      s.groups = saved.groups as typeof s.groups;
+      s.insets = saved.insets as typeof s.insets;
     }),
 
     // ── Library ──────────────────────────────────────────────────────────
     groups: [],
-    addGroup: (group) => set((s) => { s.groups.push(group); }),
+    addGroup: (group) => set((s) => {
+      s.groups.push(group);
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
+    }),
     updateGroup: (id, patch) => set((s) => {
       const i = s.groups.findIndex(g => g.id === id);
       if (i !== -1) Object.assign(s.groups[i], patch);
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
-    removeGroup: (id) => set((s) => { s.groups = s.groups.filter(g => g.id !== id); }),
+    removeGroup: (id) => set((s) => {
+      s.groups = s.groups.filter(g => g.id !== id);
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
+    }),
     toggleGroupExpanded: (id) => set((s) => {
       const i = s.groups.findIndex(g => g.id === id);
       if (i !== -1) s.groups[i].expanded = !s.groups[i].expanded;
+      // No persist for UI-only state like expanded
     }),
     addImageToGroup: (groupId, image) => set((s) => {
       const i = s.groups.findIndex(g => g.id === groupId);
       if (i !== -1) s.groups[i].images.push(image);
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
     removeImageFromGroup: (groupId, imageId) => set((s) => {
       const i = s.groups.findIndex(g => g.id === groupId);
       if (i !== -1) s.groups[i].images = s.groups[i].images.filter(img => img.id !== imageId);
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
 
     // ── Document ──────────────────────────────────────────────────────────
@@ -143,48 +189,52 @@ export const useStore = create<AppState>()(
       const oldW = s.doc.width;
       const oldH = s.doc.height;
       Object.assign(s.doc, patch);
-      // Scale existing objects proportionally when canvas dimensions change
       const newW = s.doc.width;
       const newH = s.doc.height;
       if ((newW !== oldW || newH !== oldH) && s.doc.objects.length > 0) {
         const sx = newW / oldW;
         const sy = newH / oldH;
-        // Use a single uniform scale to avoid distorting objects when aspect ratio changes
         const s1 = Math.min(sx, sy);
         s.doc.objects.forEach(obj => {
-          obj.x      = Math.round(obj.x      * sx);   // positions scale per-axis
+          obj.x      = Math.round(obj.x      * sx);
           obj.y      = Math.round(obj.y      * sy);
-          obj.width  = Math.round(obj.width  * s1);   // sizes stay proportional
+          obj.width  = Math.round(obj.width  * s1);
           obj.height = Math.round(obj.height * s1);
           if (obj.type === 'scalebar') obj.length = Math.round(obj.length * s1);
         });
       }
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
-    updateMetadata: (patch) => set((s) => { Object.assign(s.doc.metadata, patch); }),
+    updateMetadata: (patch) => set((s) => {
+      Object.assign(s.doc.metadata, patch);
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
+    }),
 
     // ── Canvas objects ────────────────────────────────────────────────────
     addObject: (obj) => set((s) => {
       pushHistory(s);
       s.doc.objects.push(obj);
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
     updateObject: (id, patch) => set((s) => {
-      // Only snapshot on structural moves/resizes (not property slider tweaks)
       const structural = ['x','y','width','height','rotation'].some(k => k in patch);
       if (structural) pushHistory(s);
       const i = s.doc.objects.findIndex(o => o.id === id);
       if (i !== -1) Object.assign(s.doc.objects[i], patch);
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
     removeObject: (id) => set((s) => {
       pushHistory(s);
       s.doc.objects = s.doc.objects.filter(o => o.id !== id);
-      // Also remove any inset pairs referencing this object
       s.insets = s.insets.filter(p => p.parentObjectId !== id && p.insetObjectId !== id);
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
     reorderObjects: (ids) => set((s) => {
       pushHistory(s);
       s.doc.objects = ids
         .map(id => s.doc.objects.find(o => o.id === id))
         .filter(Boolean) as typeof s.doc.objects;
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
     batchUpdateObjects: (updates) => set((s) => {
       pushHistory(s);
@@ -192,6 +242,7 @@ export const useStore = create<AppState>()(
         const i = s.doc.objects.findIndex(o => o.id === id);
         if (i !== -1) Object.assign(s.doc.objects[i], patch);
       }
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
 
     duplicateObject: (id) => set((s) => {
@@ -204,6 +255,7 @@ export const useStore = create<AppState>()(
       clone.y    += 20;
       clone.label = clone.label + ' (copy)';
       s.doc.objects.push(clone);
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
 
     // ── Insets ────────────────────────────────────────────────────────────
@@ -211,10 +263,12 @@ export const useStore = create<AppState>()(
     addInset: (pair) => set((s) => {
       pushHistory(s);
       s.insets.push(pair);
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
     removeInset: (id) => set((s) => {
       pushHistory(s);
       s.insets = s.insets.filter(p => p.id !== id);
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
 
     // ── Undo / redo ───────────────────────────────────────────────────────
@@ -227,9 +281,9 @@ export const useStore = create<AppState>()(
       s.past.splice(s.past.length - 1, 1);
       s.future.push(snap(s.doc.objects as CanvasObject[], s.insets as InsetPair[]));
       if (s.future.length > 60) s.future.shift();
-      // Restore
       s.doc.objects = prev.objects as typeof s.doc.objects;
       s.insets      = prev.insets  as typeof s.insets;
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
 
     redo: () => set((s) => {
@@ -240,6 +294,7 @@ export const useStore = create<AppState>()(
       if (s.past.length > 60) s.past.shift();
       s.doc.objects = next.objects as typeof s.doc.objects;
       s.insets      = next.insets  as typeof s.insets;
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
 
     // ── Selection / tool / zoom ───────────────────────────────────────────

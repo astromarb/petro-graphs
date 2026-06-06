@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import Topbar from './components/Topbar';
 import LeftSidebar from './components/LeftSidebar';
 import CanvasArea from './components/CanvasArea';
@@ -6,7 +6,7 @@ import RightSidebar from './components/RightSidebar';
 import MetadataModal from './components/MetadataModal';
 import LayersPanel from './components/LayersPanel';
 import CalibrationModal from './components/CalibrationModal';
-import { useStore } from './store';
+import { useStore, loadPersistedState } from './store';
 import type { Tool } from './types';
 
 const KEY_TOOL_MAP: Record<string, Tool> = {
@@ -17,8 +17,18 @@ export default function App() {
   const {
     setTool, setZoom, zoom,
     selectedId, removeObject, duplicateObject,
-    undo, redo, past, future,
+    undo, redo, past, future, rehydrate,
   } = useStore();
+
+  const [ready, setReady] = useState(false);
+
+  // Rehydrate from IndexedDB before first render
+  useEffect(() => {
+    loadPersistedState().then(saved => {
+      if (saved) rehydrate(saved);
+      setReady(true);
+    });
+  }, []);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -62,6 +72,14 @@ export default function App() {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [zoom, selectedId, past, future]);
+
+  if (!ready) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0e0f14', color: 'var(--text-muted)', fontSize: 13 }}>
+        Loading…
+      </div>
+    );
+  }
 
   return (
     <div className="app-shell">

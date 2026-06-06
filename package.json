@@ -17,6 +17,7 @@
     "@types/katex": "^0.16.8",
     "fabric": "^7.4.0",
     "html-to-image": "^1.11.13",
+    "idb-keyval": "^6.2.5",
     "immer": "^11.1.8",
     "jspdf": "^4.2.1",
     "katex": "^0.17.0",
