@@ -5,7 +5,7 @@ import * as fabric from 'fabric';
 import { useStore } from '../store';
 import type {
   CanvasObject, ImageObject, TextObject, ShapeObject, ScaleBarObject,
-  BorderStyle, InsetPair, ThinSectionImage, ImageAdjustments, ScaleUnit, CanvasDoc,
+  BorderStyle, InsetPair, ThinSectionImage, ImageAdjustments, CanvasDoc,
 } from '../types';
 import { DEFAULT_ADJUSTMENTS } from '../types';
 import { nanoid, niceScaleBar, UNIT_METERS, ptToPx } from '../utils';
@@ -318,7 +318,8 @@ export default function CanvasArea() {
     fc.on('contextmenu', (options) => {
       const nativeEvent = options.e as MouseEvent;
       nativeEvent.preventDefault();
-      const pt = getScenePt(fc, options);
+      let pt: fabric.Point | null = null;
+      try { pt = fc.getScenePoint(nativeEvent); } catch { pt = null; }
       if (!pt) return;
       const sd = useStore.getState();
       const hit = [...sd.doc.objects].reverse().find(o =>
