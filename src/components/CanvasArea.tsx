@@ -1087,7 +1087,7 @@ function createFabricObject(
       if (latexInFlight.get(obj.id) === renderKey) return;
       latexInFlight.set(obj.id, renderKey);
 
-      renderLatexToFabricImage(o.content, o.fontSize, o.color)
+      renderLatexToFabricImage(o.content, o.fontSize, o.color, true)
         .then(async (cached) => {
           // Check if the store content changed while we were rendering
           const storeState = useStore.getState();
@@ -1111,8 +1111,10 @@ function createFabricObject(
           if (dup) fc.remove(dup);
 
           const fImg = await cached.clone() as LatexFabricImage;
-          const imgW = fImg.width ?? 100;
-          const scale = imgW > 0 ? o.width / imgW : 1;
+          // Scale by height so math renders at exactly fontSize pixels tall.
+          // The SVG was rendered at 2× pixel ratio so scale ≈ 0.5 at natural size.
+          const imgH = fImg.height ?? 30;
+          const scale = imgH > 0 ? (o.fontSize || 20) / imgH : 1;
           const isSelectNow = _activeTool === 'select';
           fImg.set({
             left: o.x, top: o.y, angle: o.rotation,

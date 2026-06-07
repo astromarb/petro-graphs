@@ -47,13 +47,6 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
     } catch { /* tainted canvas */ }
   }, []);
 
-  const getMultiplier = (zoom: number): number => {
-    if (resOption === 1) return 1 / zoom;
-    if (resOption === 2) return 2 / zoom;
-    // DPI-based: screen is 96 dpi, target is resOption
-    return (resOption / 96) / zoom;
-  };
-
   const doExport = async () => {
     const fc = fabricCanvasRef.current;
     if (!fc) return;
@@ -65,12 +58,13 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
     const savedW   = fc.width  ?? outW;
     const savedH   = fc.height ?? outH;
     try {
-      const zoom       = fc.getZoom();
-      const multiplier = getMultiplier(zoom);
-
-      // Temporarily set viewport to document-only export mode
-      fc.setViewportTransform([multiplier, 0, 0, multiplier, 0, 0]);
+      // Map doc-space coordinates exactly to the export canvas.
+      // Dividing by the current viewport zoom would misplace objects that
+      // aren't in the top-left quadrant, causing them to fall outside bounds.
+      const exportScale = outW / doc.width;
+      fc.setViewportTransform([exportScale, 0, 0, exportScale, 0, 0]);
       fc.setDimensions({ width: outW, height: outH });
+      fc.renderAll(); // flush all object paints at the new viewport before capture
 
       let dataUrl: string;
       try {
