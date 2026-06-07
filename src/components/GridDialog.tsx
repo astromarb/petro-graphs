@@ -94,6 +94,7 @@ export default function GridDialog({ onClose }: Props) {
         display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+      onKeyDown={e => { if (e.key === 'Escape') onClose(); }}
     >
       <div style={{
         background: 'var(--bg-surface)',
