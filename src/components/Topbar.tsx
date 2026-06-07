@@ -75,10 +75,9 @@ export default function Topbar() {
       <div className="topbar">
         {/* Logo */}
         <div className="topbar-logo">
-          <div className="logo-mark">PF</div>
+          <div className="logo-mark">PG</div>
           <div>
-            <div className="topbar-title">PetroFigure</div>
-            <div className="topbar-sub">Thin Section Composer</div>
+            <div className="topbar-title">PetroGraphing</div>
           </div>
         </div>
 

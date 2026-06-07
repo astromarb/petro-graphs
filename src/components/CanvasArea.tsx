@@ -715,6 +715,21 @@ export default function CanvasArea() {
             return; // either waiting for in-flight or just started — don't syncFabricProps
           }
         }
+        // isLatex toggled OFF — existing FabricImage must be replaced with a plain Textbox
+        type ExtFabricImg = fabric.FabricObject & { _isLatexImg?: boolean };
+        if (
+          obj.type === 'text' &&
+          !(obj as TextObject).isLatex &&
+          (existing as ExtFabricImg)._isLatexImg
+        ) {
+          suppressSelectionClear = true;
+          fc.remove(existing);
+          suppressSelectionClear = false;
+          objMapRef.current.delete(obj.id);
+          latexInFlight.delete(obj.id);
+          createFabricObject(obj, groups, fc, objMapRef.current);
+          return;
+        }
         // Scale bar: recreate when visual properties change
         if (obj.type === 'scalebar') {
           const o = obj as ScaleBarObject;
@@ -954,6 +969,13 @@ export default function CanvasArea() {
   }, []);
 
   // ── Render ────────────────────────────────────────────────────────────
+  //
+  // IMPORTANT: The <canvas> must be the FIRST child of wrapRef AND wrapped in
+  // nothing conditional.  Fabric.js wraps it in its own container div after
+  // mount; if React tries to insertBefore() any sibling relative to the canvas
+  // element it throws NotFoundError because the canvas is no longer a direct
+  // child.  All React-managed overlays live inside a single stable div that
+  // comes AFTER the canvas, so React never needs to use the canvas as an anchor.
   return (
     <div
       ref={wrapRef}
@@ -963,91 +985,97 @@ export default function CanvasArea() {
       onDragOver={e => { e.preventDefault(); setDropHighlight(true); }}
       onDragLeave={() => setDropHighlight(false)}
     >
-      {/* Drop overlay */}
-      {dropHighlight && (
-        <div style={{
-          position: 'absolute', inset: 0, border: '2px solid var(--accent)',
-          background: 'var(--accent-glow)', pointerEvents: 'none', zIndex: 10,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          <span style={{ fontSize: 14, color: 'var(--accent)', fontWeight: 600 }}>Drop image here</span>
-        </div>
-      )}
-
-      {/* Scale bar hint */}
-      {tool === 'scalebar' && (
-        <div style={{
-          position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
-          background: 'var(--bg-overlay)',
-          border: `1px solid ${selectedCalibratedImg ? 'var(--accent)' : 'var(--border)'}`,
-          borderRadius: 8, padding: '7px 14px', zIndex: 20, pointerEvents: 'none',
-        }}>
-          <span style={{ fontSize: 12, color: selectedCalibratedImg ? 'var(--accent)' : 'var(--text-muted)' }}>
-            {selectedCalibratedImg
-              ? `Click to place scale bar — calibrated from ${selectedCalibratedImg.name}`
-              : 'Select a calibrated image first, then click to place a scale bar'}
-          </span>
-        </div>
-      )}
-
-      {/* Inset confirmation toolbar */}
-      {insetPhase === 'selecting' && (
-        <div style={{
-          position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
-          background: 'var(--bg-overlay)', border: '1px solid var(--accent)',
-          borderRadius: 8, padding: '8px 14px', zIndex: 20,
-          display: 'flex', alignItems: 'center', gap: 10,
-          boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
-        }}>
-          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-            Resize the selection, then confirm to create inset
-          </span>
-          <button className="btn btn-primary" style={{ fontSize: 11 }} onClick={confirmInset}>
-            ✓ Create Inset
-          </button>
-          <button className="btn btn-ghost" style={{ fontSize: 11 }} onClick={cancelInset}>
-            Cancel
-          </button>
-        </div>
-      )}
-
-      {/* Inset click prompt */}
-      {tool === 'inset' && insetPhase === 'idle' && (
-        <div style={{
-          position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
-          background: 'var(--bg-overlay)', border: '1px solid var(--border)',
-          borderRadius: 8, padding: '7px 14px', zIndex: 20, pointerEvents: 'none',
-        }}>
-          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-            Click on an image to start an inset selection
-          </span>
-        </div>
-      )}
-
-      {/* Fabric canvas — fills wrapper; document is centered via viewport transform */}
+      {/* Fabric canvas — MUST be first child; Fabric wraps it after mount */}
       <canvas ref={canvasElRef} style={{ position: 'absolute', inset: 0, display: 'block' }} />
 
-      {/* Rulers — positioned at document boundary using docOffset */}
-      {showRulers && (
-        <>
-          <RulerOverlay orientation="horizontal" size={Math.round(doc.width * zoom)} zoom={zoom} dpi={doc.dpi} docSize={doc.width} offsetX={docOffset.x} offsetY={docOffset.y} />
-          <RulerOverlay orientation="vertical"   size={Math.round(doc.height * zoom)} zoom={zoom} dpi={doc.dpi} docSize={doc.height} offsetX={docOffset.x} offsetY={docOffset.y} />
-        </>
-      )}
+      {/* React overlay layer — stable wrapper so React never inserts before the canvas */}
+      <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
 
-      {/* Status bar */}
-      <div style={{
-        position: 'absolute', bottom: 12, right: 12,
-        background: 'var(--bg-overlay)', border: '1px solid var(--border)',
-        borderRadius: 5, padding: '4px 10px', fontSize: 11, color: 'var(--text-secondary)',
-        display: 'flex', gap: 8,
-      }}>
-        <span>{doc.width} × {doc.height} px</span>
-        <span style={{ color: 'var(--border)' }}>|</span>
-        <span>{Math.round(zoom * 100)}%</span>
-        <span style={{ color: 'var(--border)' }}>|</span>
-        <span>{doc.dpi} dpi</span>
-      </div>
+        {/* Drop overlay */}
+        {dropHighlight && (
+          <div style={{
+            position: 'absolute', inset: 0, border: '2px solid var(--accent)',
+            background: 'var(--accent-glow)', zIndex: 10,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <span style={{ fontSize: 14, color: 'var(--accent)', fontWeight: 600 }}>Drop image here</span>
+          </div>
+        )}
+
+        {/* Scale bar hint */}
+        {tool === 'scalebar' && (
+          <div style={{
+            position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
+            background: 'var(--bg-overlay)',
+            border: `1px solid ${selectedCalibratedImg ? 'var(--accent)' : 'var(--border)'}`,
+            borderRadius: 8, padding: '7px 14px', zIndex: 20,
+          }}>
+            <span style={{ fontSize: 12, color: selectedCalibratedImg ? 'var(--accent)' : 'var(--text-muted)' }}>
+              {selectedCalibratedImg
+                ? `Click to place scale bar — calibrated from ${selectedCalibratedImg.name}`
+                : 'Select a calibrated image first, then click to place a scale bar'}
+            </span>
+          </div>
+        )}
+
+        {/* Inset confirmation toolbar */}
+        {insetPhase === 'selecting' && (
+          <div style={{
+            position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
+            background: 'var(--bg-overlay)', border: '1px solid var(--accent)',
+            borderRadius: 8, padding: '8px 14px', zIndex: 20,
+            display: 'flex', alignItems: 'center', gap: 10,
+            boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+            pointerEvents: 'auto',
+          }}>
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+              Resize the selection, then confirm to create inset
+            </span>
+            <button className="btn btn-primary" style={{ fontSize: 11 }} onClick={confirmInset}>
+              ✓ Create Inset
+            </button>
+            <button className="btn btn-ghost" style={{ fontSize: 11 }} onClick={cancelInset}>
+              Cancel
+            </button>
+          </div>
+        )}
+
+        {/* Inset click prompt */}
+        {tool === 'inset' && insetPhase === 'idle' && (
+          <div style={{
+            position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
+            background: 'var(--bg-overlay)', border: '1px solid var(--border)',
+            borderRadius: 8, padding: '7px 14px', zIndex: 20,
+          }}>
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+              Click on an image to start an inset selection
+            </span>
+          </div>
+        )}
+
+        {/* Rulers — positioned at document boundary using docOffset */}
+        {showRulers && (
+          <>
+            <RulerOverlay orientation="horizontal" size={Math.round(doc.width * zoom)} zoom={zoom} dpi={doc.dpi} docSize={doc.width} offsetX={docOffset.x} offsetY={docOffset.y} />
+            <RulerOverlay orientation="vertical"   size={Math.round(doc.height * zoom)} zoom={zoom} dpi={doc.dpi} docSize={doc.height} offsetX={docOffset.x} offsetY={docOffset.y} />
+          </>
+        )}
+
+        {/* Status bar */}
+        <div style={{
+          position: 'absolute', bottom: 12, right: 12,
+          background: 'var(--bg-overlay)', border: '1px solid var(--border)',
+          borderRadius: 5, padding: '4px 10px', fontSize: 11, color: 'var(--text-secondary)',
+          display: 'flex', gap: 8,
+        }}>
+          <span>{doc.width} × {doc.height} px</span>
+          <span style={{ color: 'var(--border)' }}>|</span>
+          <span>{Math.round(zoom * 100)}%</span>
+          <span style={{ color: 'var(--border)' }}>|</span>
+          <span>{doc.dpi} dpi</span>
+        </div>
+
+      </div>{/* end overlay layer */}
 
       {/* Right-click context menu */}
       {ctxMenu && createPortal(
@@ -1084,17 +1112,21 @@ function createFabricObject(
     const img   = group?.images.find(i => i.id === obj.imageId);
     if (!img) return;
 
-    fabric.FabricImage.fromURL(img.dataUrl).then((fImg) => {
-      const o = obj as ImageObject;
-      fImg.set({ left: o.x, top: o.y, angle: o.rotation, opacity: o.opacity });
-      fImg.scaleToWidth(o.width);
-      applyBorder(fImg, o.border);
-      applyAdjustments(fImg, o.adjustments ?? DEFAULT_ADJUSTMENTS);
-      (fImg as typeof fImg & { storeId: string }).storeId = obj.id;
-      fc.add(fImg);
-      map.set(obj.id, fImg);
-      fc.renderAll();
-    });
+    fabric.FabricImage.fromURL(img.dataUrl)
+      .then((fImg) => {
+        const o = obj as ImageObject;
+        fImg.set({ left: o.x, top: o.y, angle: o.rotation, opacity: o.opacity });
+        fImg.scaleToWidth(Math.max(1, o.width));
+        if (o.border) applyBorder(fImg, o.border);
+        applyAdjustments(fImg, o.adjustments ?? DEFAULT_ADJUSTMENTS);
+        (fImg as typeof fImg & { storeId: string }).storeId = obj.id;
+        fc.add(fImg);
+        map.set(obj.id, fImg);
+        fc.renderAll();
+      })
+      .catch((err) => {
+        console.error('[PetroGraphing] Failed to load image onto canvas:', err);
+      });
     return;
   }
 
