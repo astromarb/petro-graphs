@@ -6,8 +6,8 @@
   "scripts": {
     "dev": "vite",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build",
+    "tauri:dev": "node scripts/tauri-run.mjs dev",
+    "tauri:build": "node scripts/tauri-run.mjs build",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
