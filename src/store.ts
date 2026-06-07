@@ -126,6 +126,10 @@ export interface AppState {
   showRulers:           boolean;
   toggleRulers:         () => void;
 
+  // Native file path (desktop only)
+  currentFilePath: string | null;
+  setCurrentFilePath: (path: string | null) => void;
+
   rehydrate: (saved: PersistedState) => void;
 }
 
@@ -454,5 +458,8 @@ export const useStore = create<AppState>()(
     toggleLayersPanel: () => set((s) => { s.showLayersPanel = !s.showLayersPanel; }),
     showRulers: false,
     toggleRulers: () => set((s) => { s.showRulers = !s.showRulers; }),
+
+    currentFilePath: null,
+    setCurrentFilePath: (path) => set((s) => { s.currentFilePath = path; }),
   }))
 );

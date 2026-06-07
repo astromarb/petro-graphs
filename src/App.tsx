@@ -8,6 +8,7 @@ import MetadataModal from './components/MetadataModal';
 import LayersPanel from './components/LayersPanel';
 import CalibrationModal from './components/CalibrationModal';
 import { useStore, loadPersistedState } from './store';
+import { isDesktop, saveProject, saveProjectAs, openProject } from './fileOps';
 import type { Tool } from './types';
 
 const KEY_TOOL_MAP: Record<string, Tool> = {
@@ -19,6 +20,7 @@ export default function App() {
     setTool, setZoom, zoom,
     selectedId, removeObject, duplicateObject,
     undo, redo, past, future, rehydrate,
+    setCurrentFilePath,
   } = useStore();
 
   const [ready, setReady] = useState(false);
@@ -68,6 +70,24 @@ export default function App() {
       if ((e.ctrlKey || e.metaKey) && e.key === 'd' && selectedId) {
         e.preventDefault();
         duplicateObject(selectedId);
+      }
+
+      // Native file ops (desktop only)
+      if (isDesktop() && (e.ctrlKey || e.metaKey)) {
+        if (e.key.toLowerCase() === 's') {
+          e.preventDefault();
+          if (e.shiftKey) {
+            saveProjectAs().then(p => { if (p) setCurrentFilePath(p); });
+          } else {
+            saveProject().then(p => { if (p) setCurrentFilePath(p); });
+          }
+          return;
+        }
+        if (e.key.toLowerCase() === 'o') {
+          e.preventDefault();
+          openProject();
+          return;
+        }
       }
     };
     window.addEventListener('keydown', handler);

@@ -2,12 +2,13 @@ import React, { useState } from 'react';
 import {
   MousePointer2, Type, Square, Ruler, Hand, Crop,
   Download, Layers, Info, ZoomIn, ZoomOut, Maximize2,
-  Undo2, Redo2,
+  Undo2, Redo2, FolderOpen, Save,
 } from 'lucide-react';
 import { useStore } from '../store';
 import type { Tool } from '../types';
 import ExportModal from './ExportModal';
 import { sharedFabricRef } from '../fabricRef';
+import { isDesktop, saveProject, saveProjectAs, openProject } from '../fileOps';
 
 const TOOLS: { id: Tool; icon: React.ReactNode; label: string; sep?: boolean }[] = [
   { id: 'select',   icon: <MousePointer2 size={14} />, label: 'Select (V)' },
@@ -25,11 +26,42 @@ export default function Topbar() {
     past, future, undo, redo,
     toggleMetadataPanel, toggleLayersPanel,
     showRulers, toggleRulers,
+    currentFilePath, setCurrentFilePath,
   } = useStore();
 
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleVal, setTitleVal] = useState(doc.title);
   const [showExport, setShowExport] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const desktop = isDesktop();
+  const fileName = currentFilePath
+    ? currentFilePath.split(/[\\/]/).pop()!
+    : null;
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const path = await saveProject();
+      if (path) setCurrentFilePath(path);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveAs = async () => {
+    setSaving(true);
+    try {
+      const path = await saveProjectAs();
+      if (path) setCurrentFilePath(path);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleOpen = async () => {
+    await openProject();
+  };
 
   const commitTitle = () => {
     setDocMeta({ title: titleVal.trim() || 'Untitled Figure' });
@@ -49,6 +81,33 @@ export default function Topbar() {
         </div>
 
         <div className="sep" />
+
+        {/* Native file ops — desktop only */}
+        {desktop && (
+          <>
+            <button className="btn-icon" title="Open project (Ctrl+O)" onClick={handleOpen}>
+              <FolderOpen size={14} />
+            </button>
+            <button
+              className="btn-icon"
+              title={currentFilePath ? `Save (Ctrl+S) — ${fileName}` : 'Save As… (Ctrl+S)'}
+              onClick={handleSave}
+              disabled={saving}
+            >
+              <Save size={14} />
+            </button>
+            {fileName && (
+              <span
+                style={{ fontSize: 11, color: 'var(--text-muted)', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
+                title={`Saved: ${currentFilePath}\nCtrl+Shift+S to Save As…`}
+                onClick={handleSaveAs}
+              >
+                {fileName}
+              </span>
+            )}
+            <div className="sep" />
+          </>
+        )}
 
         {/* Doc title */}
         {editingTitle ? (
