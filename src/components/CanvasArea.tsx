@@ -17,6 +17,9 @@ import { sharedFabricRef } from '../fabricRef';
 const latexInFlight = new Map<string, string>();
 // Prevents selection:cleared from closing the sidebar during LaTeX Fabric object recreation
 let suppressSelectionClear = false;
+// Current tool — written by the component, read by the module-level createFabricObject.
+// Needed because createFabricObject is module-scoped and cannot access component refs.
+let _activeTool = 'select';
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -221,7 +224,7 @@ export default function CanvasArea() {
 
   // ── Refs to latest values (used in stable fabric event handlers) ──────
   const toolRef = useRef(tool);
-  useEffect(() => { toolRef.current = tool; }, [tool]);
+  useEffect(() => { toolRef.current = tool; _activeTool = tool; }, [tool]);
   const zoomRef = useRef(zoom);
   useEffect(() => { zoomRef.current = zoom; }, [zoom]);
 
@@ -1109,7 +1112,7 @@ function createFabricObject(
           const fImg = await cached.clone() as LatexFabricImage;
           const imgW = fImg.width ?? 100;
           const scale = imgW > 0 ? o.width / imgW : 1;
-          const isSelectNow = toolRef.current === 'select';
+          const isSelectNow = _activeTool === 'select';
           fImg.set({
             left: o.x, top: o.y, angle: o.rotation,
             scaleX: scale, scaleY: scale,

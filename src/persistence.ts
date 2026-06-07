@@ -11,7 +11,6 @@ function isTauri(): boolean {
 
 async function tauriSave(data: PersistedState): Promise<void> {
   const { writeTextFile, mkdir, BaseDirectory } = await import('@tauri-apps/plugin-fs');
-  // Ensure the app local data directory exists (Tauri creates it, but be defensive)
   await mkdir('', { baseDir: BaseDirectory.AppLocalData, recursive: true }).catch(() => {});
   await writeTextFile(SAVE_FILE, JSON.stringify(data), {
     baseDir: BaseDirectory.AppLocalData,
@@ -34,7 +33,8 @@ const IDB_KEY_V1 = 'petrofigure-state-v1';
 async function idbSave(data: PersistedState): Promise<void> {
   if (typeof indexedDB === 'undefined') return;
   const { set } = await import('idb-keyval');
-  await set(IDB_KEY_V2, JSON.parse(JSON.stringify(data)));
+  // idb-keyval uses the structured-clone algorithm — no manual deep-clone needed
+  await set(IDB_KEY_V2, data);
 }
 
 async function idbLoad(): Promise<PersistedState | null> {
@@ -58,13 +58,25 @@ async function idbLoad(): Promise<PersistedState | null> {
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
+/**
+ * Schedule a debounced save.
+ *
+ * IMPORTANT: `data` must be the FINALIZED (frozen) Zustand state, NOT an Immer
+ * draft. Immer draft proxies are revoked after the setter returns, so capturing
+ * them here would cause a TypeError when the timeout fires. Always call this from
+ * a Zustand subscriber (which receives finalized state), never from inside a
+ * set() callback (which receives a draft).
+ *
+ * The state is NOT deep-cloned here because:
+ *  - Immer already produces frozen immutable objects — no mutation possible.
+ *  - Doing JSON.parse(JSON.stringify(state)) synchronously on MB-scale image
+ *    data URLs blocks the main thread and causes the UI to go blank.
+ */
 export function persistSave(data: PersistedState): void {
   if (saveTimer) clearTimeout(saveTimer);
-  // Snapshot now (synchronous deep-clone) so any mutation after this call is not captured
-  const snapshot = JSON.parse(JSON.stringify(data)) as PersistedState;
   saveTimer = setTimeout(() => {
     const fn = isTauri() ? tauriSave : idbSave;
-    fn(snapshot).catch(() => {});
+    fn(data).catch(() => {});
   }, 500);
 }
 
