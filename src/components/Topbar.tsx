@@ -2,11 +2,12 @@ import React, { useState } from 'react';
 import {
   MousePointer2, Type, Square, Ruler, Hand, Crop,
   Download, Layers, Info, ZoomIn, ZoomOut, Maximize2,
-  Undo2, Redo2, FolderOpen, Save,
+  Undo2, Redo2, FolderOpen, Save, LayoutGrid,
 } from 'lucide-react';
 import { useStore } from '../store';
 import type { Tool } from '../types';
 import ExportModal from './ExportModal';
+import GridDialog from './GridDialog';
 import { sharedFabricRef } from '../fabricRef';
 import { isDesktop, saveProject, saveProjectAs, openProject } from '../fileOps';
 
@@ -32,6 +33,7 @@ export default function Topbar() {
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleVal, setTitleVal] = useState(doc.title);
   const [showExport, setShowExport] = useState(false);
+  const [showGrid, setShowGrid]   = useState(false);
   const [saving, setSaving] = useState(false);
 
   const desktop = isDesktop();
@@ -175,6 +177,17 @@ export default function Topbar() {
 
         <div className="sep" />
 
+        {/* Grid layout */}
+        <button
+          className="btn-icon"
+          title="Place images as grid"
+          onClick={() => setShowGrid(true)}
+        >
+          <LayoutGrid size={14} />
+        </button>
+
+        <div className="sep" />
+
         {/* Zoom */}
         <button className="btn-icon" onClick={() => setZoom(zoom - 0.1)} title="Zoom out (-)">
           <ZoomOut size={14} />
@@ -220,6 +233,7 @@ export default function Topbar() {
           onClose={() => setShowExport(false)}
         />
       )}
+      {showGrid && <GridDialog onClose={() => setShowGrid(false)} />}
     </>
   );
 }

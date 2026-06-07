@@ -233,6 +233,7 @@ function ImagePanel({ obj, update, dpi }: { obj: ImageObject; update: (p: Partia
       color: '#ffffff', labelColor: '#ffffff', thickness: 4,
       fontSize: ptToPx(8, dpi),
       metersPerCanvasPx,
+      parentImageId: obj.id,
     };
     addObject(sb);
   };

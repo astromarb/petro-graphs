@@ -72,6 +72,7 @@ export interface AppState {
 
   // Canvas objects
   addObject:          (obj: CanvasObject) => void;
+  addObjects:         (objs: CanvasObject[]) => void;
   updateObject:       (id: string, patch: Partial<CanvasObject>) => void;
   removeObject:       (id: string) => void;
   reorderObjects:     (ids: string[]) => void;
@@ -297,6 +298,10 @@ export const useStore = create<AppState>()(
     addObject: (obj) => set((s) => {
       pushHistory(s);
       s.doc.objects.push(obj);
+    }),
+    addObjects: (objs) => set((s) => {
+      pushHistory(s);
+      s.doc.objects.push(...objs);
     }),
     updateObject: (id, patch) => set((s) => {
       const structural = ['x','y','width','height','rotation'].some(k => k in patch);

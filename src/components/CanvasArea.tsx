@@ -305,13 +305,35 @@ export default function CanvasArea() {
       const fObj = e.target as fabric.FabricObject & { storeId?: string };
       if (!fObj?.storeId) return;
       if (fObj === cropRectRef.current) return;
-      useStore.getState().updateObject(fObj.storeId, {
-        x: fObj.left ?? 0,
-        y: fObj.top  ?? 0,
-        width:  (fObj.width  ?? 1) * (fObj.scaleX ?? 1),
-        height: (fObj.height ?? 1) * (fObj.scaleY ?? 1),
-        rotation: fObj.angle ?? 0,
-      });
+
+      const state = useStore.getState();
+      const prevObj = state.doc.objects.find(o => o.id === fObj.storeId);
+      const newX = fObj.left ?? 0;
+      const newY = fObj.top  ?? 0;
+      const newW = (fObj.width  ?? 1) * (fObj.scaleX ?? 1);
+      const newH = (fObj.height ?? 1) * (fObj.scaleY ?? 1);
+
+      // When an image is resized/moved, proportionally update any linked scale bars
+      if (prevObj?.type === 'image' && prevObj.width > 0) {
+        const dx = newX - prevObj.x;
+        const dy = newY - prevObj.y;
+        const scaleRatio = newW / prevObj.width;
+        const linkedBars = state.doc.objects.filter(
+          o => o.type === 'scalebar' && (o as import('../types').ScaleBarObject).parentImageId === fObj.storeId,
+        );
+        if (linkedBars.length > 0) {
+          state.batchUpdateObjects(linkedBars.map(sb => ({
+            id: sb.id,
+            patch: {
+              length: Math.max(10, Math.round((sb as import('../types').ScaleBarObject).length * scaleRatio)),
+              x: Math.round(sb.x + dx),
+              y: Math.round(sb.y + dy),
+            } as Partial<import('../types').CanvasObject>,
+          })));
+        }
+      }
+
+      state.updateObject(fObj.storeId, { x: newX, y: newY, width: newW, height: newH, rotation: fObj.angle ?? 0 });
     });
 
     // Right-click context menu — use Fabric's own event to avoid stopPropagation issue
@@ -369,6 +391,7 @@ export default function CanvasArea() {
           color: '#ffffff', labelColor: '#ffffff', thickness: 4,
           fontSize: ptToPx(8, placeDock.dpi),
           metersPerCanvasPx,
+          parentImageId: imgObj.id,
         });
         setToolRef.current('select');
         return;
@@ -908,6 +931,7 @@ export default function CanvasArea() {
         color: '#ffffff', labelColor: '#ffffff', thickness: 4,
         fontSize: ptToPx(8, useStore.getState().doc.dpi),
         metersPerCanvasPx,
+        parentImageId: insetObj.id,
       };
       addObject(sb);
     }

@@ -118,6 +118,8 @@ export interface ScaleBarObject extends CanvasObjectBase {
   fontSize: number;
   /** meters per canvas pixel — enables live unit conversion and length recalculation */
   metersPerCanvasPx?: number;
+  /** ID of the parent image this scale bar was placed on — used for auto-update on resize */
+  parentImageId?: string;
 }
 
 export type CanvasObject = ImageObject | TextObject | ShapeObject | ScaleBarObject;
