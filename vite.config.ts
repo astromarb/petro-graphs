@@ -22,5 +22,17 @@ export default defineConfig({
     target: 'chrome105',
     minify: process.env.TAURI_ENV_DEBUG ? false : 'esbuild',
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
+    rolldownOptions: {
+      output: {
+        // Split large vendor libraries into separate cacheable chunks
+        manualChunks(id) {
+          if (id.includes('/fabric/'))       return 'vendor-fabric';
+          if (id.includes('/katex/') || id.includes('/html-to-image/')) return 'vendor-katex';
+          if (id.includes('/jspdf/'))        return 'vendor-pdf';
+          if (id.includes('/react-dom/') || (id.includes('/react/') && !id.includes('/react-dom/'))) return 'vendor-react';
+          if (id.includes('/zustand/') || id.includes('/immer/')) return 'vendor-state';
+        },
+      },
+    },
   },
 })
