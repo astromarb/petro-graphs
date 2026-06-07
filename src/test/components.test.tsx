@@ -90,7 +90,7 @@ describe('RightSidebar', () => {
           x: 0, y: 0, width: 200, height: 150, rotation: 0,
           locked: false, visible: true, label: 'Rock',
           border: { color: '#fff', width: 1, style: 'solid', radius: 0 },
-          showModeTag: true, tagPosition: 'tl', opacity: 1,
+          opacity: 1,
           adjustments: {
             flipX: false, flipY: false, brightness: 0, contrast: 0,
             saturation: 0, hue: 0, grayscale: false, invert: false, sharpen: false,

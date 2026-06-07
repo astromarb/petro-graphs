@@ -2,11 +2,10 @@ import React, { useState } from 'react';
 import {
   MousePointer2, Type, Square, Ruler, Hand, Crop,
   Download, Layers, Info, ZoomIn, ZoomOut, Maximize2,
-  Undo2, Redo2, Grid3x3,
+  Undo2, Redo2,
 } from 'lucide-react';
 import { useStore } from '../store';
 import type { Tool } from '../types';
-import GridLayoutModal from './GridLayoutModal';
 import ExportModal from './ExportModal';
 import { sharedFabricRef } from '../fabricRef';
 
@@ -30,7 +29,6 @@ export default function Topbar() {
 
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleVal, setTitleVal] = useState(doc.title);
-  const [showGrid,   setShowGrid]   = useState(false);
   const [showExport, setShowExport] = useState(false);
 
   const commitTitle = () => {
@@ -118,17 +116,6 @@ export default function Topbar() {
 
         <div className="sep" />
 
-        {/* Grid layout */}
-        <button
-          className="btn-icon"
-          title="Grid layout — arrange images in a uniform grid"
-          onClick={() => setShowGrid(true)}
-        >
-          <Grid3x3 size={14} />
-        </button>
-
-        <div className="sep" />
-
         {/* Zoom */}
         <button className="btn-icon" onClick={() => setZoom(zoom - 0.1)} title="Zoom out (-)">
           <ZoomOut size={14} />
@@ -168,7 +155,6 @@ export default function Topbar() {
         </button>
       </div>
 
-      {showGrid   && <GridLayoutModal onClose={() => setShowGrid(false)} />}
       {showExport && (
         <ExportModal
           fabricCanvasRef={sharedFabricRef}

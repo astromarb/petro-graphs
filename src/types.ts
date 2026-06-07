@@ -72,8 +72,6 @@ export interface ImageObject extends CanvasObjectBase {
   groupId: string;
   mode: ImageMode;
   border: BorderStyle;
-  showModeTag: boolean;
-  tagPosition: 'tl' | 'tr' | 'bl' | 'br';
   opacity: number;
   adjustments: ImageAdjustments;
 }

@@ -32,9 +32,16 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
     const fc = fabricCanvasRef.current;
     if (!fc) return;
     try {
-      const zoom = fc.getZoom();
-      const multiplier = (1 / zoom) * 0.25; // ~25% preview
-      const url = fc.toDataURL({ format: 'png', multiplier });
+      const { doc: previewDoc } = useStore.getState();
+      const previewMult = 0.25;
+      const savedPvpt = [...(fc.viewportTransform ?? [1,0,0,1,0,0])] as [number,number,number,number,number,number];
+      const savedPw = fc.width; const savedPh = fc.height;
+      fc.setViewportTransform([previewMult, 0, 0, previewMult, 0, 0]);
+      fc.setDimensions({ width: Math.round(previewDoc.width * previewMult), height: Math.round(previewDoc.height * previewMult) });
+      const url = fc.toDataURL({ format: 'png', multiplier: 1 });
+      fc.setViewportTransform(savedPvpt);
+      fc.setDimensions({ width: savedPw ?? 800, height: savedPh ?? 600 });
+      fc.renderAll();
       if (prevBlobRef.current) URL.revokeObjectURL(prevBlobRef.current);
       setPreviewUrl(url);
     } catch { /* tainted canvas */ }
@@ -52,18 +59,25 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
     if (!fc) return;
     setBusy(true);
     setError('');
+    const outW = Math.round(doc.width  * (resOption <= 2 ? resOption : resOption / 96));
+    const outH = Math.round(doc.height * (resOption <= 2 ? resOption : resOption / 96));
+    const savedVpt = [...(fc.viewportTransform ?? [1,0,0,1,0,0])] as [number,number,number,number,number,number];
+    const savedW   = fc.width  ?? outW;
+    const savedH   = fc.height ?? outH;
     try {
       const zoom       = fc.getZoom();
       const multiplier = getMultiplier(zoom);
-      const outW = Math.round(doc.width  * (resOption <= 2 ? resOption : resOption / 96));
-      const outH = Math.round(doc.height * (resOption <= 2 ? resOption : resOption / 96));
+
+      // Temporarily set viewport to document-only export mode
+      fc.setViewportTransform([multiplier, 0, 0, multiplier, 0, 0]);
+      fc.setDimensions({ width: outW, height: outH });
 
       let dataUrl: string;
       try {
         dataUrl = fc.toDataURL({
           format: format === 'pdf' ? 'png' : format,
           quality,
-          multiplier,
+          multiplier: 1,
         });
       } catch (e) {
         throw new Error(`Canvas export failed (${(e as Error).message}). If you have LaTeX objects, try switching to plain text mode first.`);
@@ -93,6 +107,10 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
     } catch (e) {
       setError((e as Error).message);
     } finally {
+      // Restore canvas to its normal infinite-canvas state
+      fc.setViewportTransform(savedVpt);
+      fc.setDimensions({ width: savedW, height: savedH });
+      fc.renderAll();
       setBusy(false);
     }
   };

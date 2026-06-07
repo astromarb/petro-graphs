@@ -15,6 +15,8 @@ import { sharedFabricRef } from '../fabricRef';
 // Tracks in-flight LaTeX renders: objId → key currently being rendered.
 // Prevents duplicate Fabric images when the user types faster than rendering.
 const latexInFlight = new Map<string, string>();
+// Prevents selection:cleared from closing the sidebar during LaTeX Fabric object recreation
+let suppressSelectionClear = false;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -102,13 +104,15 @@ function getScenePt(fc: fabric.Canvas, options: fabric.TEvent): fabric.Point | n
 // ── Ruler overlay ─────────────────────────────────────────────────────────
 
 function RulerOverlay({
-  orientation, size, zoom, dpi, docSize,
+  orientation, size, zoom, dpi, docSize, offsetX = 0, offsetY = 0,
 }: {
   orientation: 'horizontal' | 'vertical';
   size: number;
   zoom: number;
   dpi: number;
   docSize: number;
+  offsetX?: number;
+  offsetY?: number;
 }) {
   const isH = orientation === 'horizontal';
   const RULER_SIZE = 18;
@@ -130,8 +134,8 @@ function RulerOverlay({
   void pxPerInch;
 
   const containerStyle: React.CSSProperties = isH
-    ? { position: 'absolute', top: -RULER_SIZE, left: 0, width: size, height: RULER_SIZE, pointerEvents: 'none', zIndex: 10 }
-    : { position: 'absolute', top: 0, left: -RULER_SIZE, width: RULER_SIZE, height: size, pointerEvents: 'none', zIndex: 10 };
+    ? { position: 'absolute', top: offsetY - RULER_SIZE, left: offsetX, width: size, height: RULER_SIZE, pointerEvents: 'none', zIndex: 10 }
+    : { position: 'absolute', top: offsetY, left: offsetX - RULER_SIZE, width: RULER_SIZE, height: size, pointerEvents: 'none', zIndex: 10 };
 
   return (
     <div style={{
@@ -225,6 +229,8 @@ export default function CanvasArea() {
   useEffect(() => { addObjectRef.current = addObject; }, [addObject]);
   const setSelectedIdRef = useRef(setSelectedId);
   useEffect(() => { setSelectedIdRef.current = setSelectedId; }, [setSelectedId]);
+  const setCtxMenuRef = useRef(setCtxMenu);
+  useEffect(() => { setCtxMenuRef.current = setCtxMenu; }, [setCtxMenu]);
 
   const insetPhaseRef    = useRef(insetPhase);
   const insetSourceIdRef = useRef(insetSourceId);
@@ -238,6 +244,13 @@ export default function CanvasArea() {
   // Guard: prevent double-placement from mousedown+mouseup both firing
   const justPlacedRef = useRef(false);
 
+  // Document background rect (not a store object — always at z-index 0)
+  const docBgRef    = useRef<fabric.Rect | null>(null);
+  // Tracks where the top-left of the document sits in screen space (for rulers)
+  const [docOffset, setDocOffset] = useState({ x: 0, y: 0 });
+  // True after initial viewport centering has been done
+  const viewportInitRef = useRef(false);
+
   // Keep setTool in a ref so fabric event handlers can call it
   const setToolRef = useRef(setTool);
   useEffect(() => { setToolRef.current = setTool; }, [setTool]);
@@ -246,12 +259,34 @@ export default function CanvasArea() {
   useEffect(() => {
     if (!canvasElRef.current) return;
 
+    const wrap = wrapRef.current!;
     const fc = new fabric.Canvas(canvasElRef.current, {
       selection: true,
       preserveObjectStacking: true,
+      width: wrap.clientWidth || 800,
+      height: wrap.clientHeight || 600,
     });
     fabricRef.current = fc;
     sharedFabricRef.current = fc;
+    // Resize canvas when wrapper resizes
+    const ro = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      fc.setDimensions({ width: Math.round(width), height: Math.round(height) });
+      fc.renderAll();
+    });
+    ro.observe(wrap);
+    // Document background rect — always behind store objects
+    const docBg = new fabric.Rect({
+      left: 0, top: 0,
+      width: useStore.getState().doc.width,
+      height: useStore.getState().doc.height,
+      fill: useStore.getState().doc.background,
+      selectable: false, evented: false, hoverCursor: 'default', strokeWidth: 0,
+    });
+    (docBg as fabric.Rect & { isDocBackground: boolean }).isDocBackground = true;
+    fc.add(docBg);
+    docBgRef.current = docBg;
+    viewportInitRef.current = false;
 
     fc.on('selection:created', () => {
       const sel = fc.getActiveObject() as fabric.FabricObject & { storeId?: string };
@@ -261,7 +296,7 @@ export default function CanvasArea() {
       const sel = fc.getActiveObject() as fabric.FabricObject & { storeId?: string };
       if (sel?.storeId) setSelectedIdRef.current(sel.storeId);
     });
-    fc.on('selection:cleared', () => setSelectedIdRef.current(null));
+    fc.on('selection:cleared', () => { if (!suppressSelectionClear) setSelectedIdRef.current(null); });
 
     fc.on('object:modified', (e) => {
       const fObj = e.target as fabric.FabricObject & { storeId?: string };
@@ -274,6 +309,21 @@ export default function CanvasArea() {
         height: (fObj.height ?? 1) * (fObj.scaleY ?? 1),
         rotation: fObj.angle ?? 0,
       });
+    });
+
+    // Right-click context menu — use Fabric's own event to avoid stopPropagation issue
+    fc.on('contextmenu', (options) => {
+      const nativeEvent = options.e as MouseEvent;
+      nativeEvent.preventDefault();
+      const pt = getScenePt(fc, options);
+      if (!pt) return;
+      const sd = useStore.getState();
+      const hit = [...sd.doc.objects].reverse().find(o =>
+        o.visible !== false &&
+        pt.x >= o.x && pt.x <= o.x + o.width &&
+        pt.y >= o.y && pt.y <= o.y + o.height,
+      );
+      setCtxMenuRef.current({ x: nativeEvent.clientX, y: nativeEvent.clientY, objId: hit?.id ?? null });
     });
 
     // ── mouse:up — place text/shape/scalebar, start inset ────────────
@@ -399,7 +449,7 @@ export default function CanvasArea() {
       }
     });
 
-    return () => { fc.dispose(); fabricRef.current = null; };
+    return () => { ro.disconnect(); fc.dispose(); fabricRef.current = null; sharedFabricRef.current = null; };
   }, []);
 
 
@@ -420,22 +470,46 @@ export default function CanvasArea() {
   }, [doc.width, doc.height, setZoom]);
 
   // ── Canvas size, zoom & background ───────────────────────────────────────
-  // Canvas element dimensions = doc size × zoom so the document boundary
-  // visually shrinks/grows with zoom rather than staying fixed.
+  // Zoom effect: update viewport transform (canvas element size is managed by ResizeObserver)
   useEffect(() => {
     const fc = fabricRef.current;
-    if (!fc) return;
-    fc.setDimensions({ width: Math.round(doc.width * zoom), height: Math.round(doc.height * zoom) });
-    fc.setZoom(zoom);
+    const wrap = wrapRef.current;
+    if (!fc || !wrap) return;
+    const cw = wrap.clientWidth;
+    const ch = wrap.clientHeight;
+    const vpt = fc.viewportTransform ?? [1, 0, 0, 1, 0, 0];
+    if (!viewportInitRef.current) {
+      // First run: center the document
+      viewportInitRef.current = true;
+      const { width: dw, height: dh } = useStore.getState().doc;
+      const tx = (cw - dw * zoom) / 2;
+      const ty = (ch - dh * zoom) / 2;
+      fc.setViewportTransform([zoom, 0, 0, zoom, tx, ty]);
+      setDocOffset({ x: tx, y: ty });
+    } else if (Math.abs(vpt[0] - zoom) > 0.001) {
+      // Zoom change: scale about canvas center, preserve pan
+      const ratio = zoom / vpt[0];
+      const tx = cw / 2 + (vpt[4] - cw / 2) * ratio;
+      const ty = ch / 2 + (vpt[5] - ch / 2) * ratio;
+      fc.setViewportTransform([zoom, 0, 0, zoom, tx, ty]);
+      setDocOffset({ x: tx, y: ty });
+    }
     fc.renderAll();
-  }, [zoom, doc.width, doc.height]);
+  }, [zoom]);
 
   useEffect(() => {
-    const fc = fabricRef.current;
-    if (!fc) return;
-    fc.backgroundColor = doc.background;
-    fc.renderAll();
+    if (docBgRef.current) {
+      docBgRef.current.set({ fill: doc.background });
+      fabricRef.current?.renderAll();
+    }
   }, [doc.background]);
+
+  useEffect(() => {
+    if (docBgRef.current) {
+      docBgRef.current.set({ width: doc.width, height: doc.height });
+      fabricRef.current?.renderAll();
+    }
+  }, [doc.width, doc.height]);
 
 
 
@@ -490,6 +564,7 @@ export default function CanvasArea() {
       lastPan.current = { x: e.clientX, y: e.clientY };
       const t = fc.viewportTransform;
       setPan(-t[4], -t[5]);
+      setDocOffset({ x: t[4], y: t[5] });
     };
     const onUp = (e: MouseEvent) => {
       if (!isPanning.current) return;
@@ -558,9 +633,19 @@ export default function CanvasArea() {
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      // Pinch-to-zoom (ctrlKey set by browser for trackpad pinch) = fine steps
+      const fc = fabricRef.current;
+      if (!fc) return;
       const delta = e.ctrlKey || e.metaKey ? 0.05 : 0.1;
-      setZoom(zoomRef.current + (e.deltaY > 0 ? -delta : delta));
+      const newZoom = Math.max(0.05, Math.min(4, zoomRef.current + (e.deltaY > 0 ? -delta : delta)));
+      // Zoom about the mouse cursor for natural scroll-to-zoom
+      const rect = el.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const vpt = fc.viewportTransform ?? [1, 0, 0, 1, 0, 0];
+      const ratio = newZoom / vpt[0];
+      fc.setViewportTransform([newZoom, 0, 0, newZoom, mx + (vpt[4] - mx) * ratio, my + (vpt[5] - my) * ratio]);
+      fc.renderAll();
+      setZoom(newZoom);
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
@@ -594,7 +679,9 @@ export default function CanvasArea() {
           if (existing._latexKey !== newKey) {
             // Only kick off a new render if not already rendering this exact key
             if (latexInFlight.get(obj.id) !== newKey) {
+              suppressSelectionClear = true;
               fc.remove(existing);
+              suppressSelectionClear = false;
               objMapRef.current.delete(obj.id);
               createFabricObject(obj, groups, fc, objMapRef.current);
             }
@@ -624,6 +711,8 @@ export default function CanvasArea() {
       const fObj = objMapRef.current.get(obj.id);
       if (fObj) (fc as fabric.Canvas & { moveObjectTo(obj: fabric.FabricObject, index: number): void }).moveObjectTo(fObj, idx);
     });
+    // Document background rect always stays below store objects
+    if (docBgRef.current) fc.sendObjectToBack(docBgRef.current);
 
     fc.renderAll();
   }, [doc.objects, groups]);
@@ -726,7 +815,7 @@ export default function CanvasArea() {
       height: Math.round(defaultH),
       rotation: 0, locked: false, visible: true, label: img.name,
       border: { color: '#ffffff', width: 2, style: 'solid', radius: 0 },
-      showModeTag: false, tagPosition: 'tl', opacity: 1,
+      opacity: 1,
       adjustments: { ...DEFAULT_ADJUSTMENTS },
     });
   }, [addObject]);
@@ -785,7 +874,7 @@ export default function CanvasArea() {
       rotation: 0, locked: false, visible: true,
       label: `${parentObj.label} — inset`,
       border: { color: '#aa3bff', width: 2, style: 'solid', radius: 0 },
-      showModeTag: false, tagPosition: 'tl', opacity: 1,
+      opacity: 1,
       adjustments: { ...DEFAULT_ADJUSTMENTS },
     };
     addObject(insetObj);
@@ -836,39 +925,15 @@ export default function CanvasArea() {
     setInsetSourceId(null);
   }, []);
 
-  // ── Context menu (right-click) ────────────────────────────────────────
-  const onContextMenu = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    const fc = fabricRef.current;
-    const canvasEl = canvasElRef.current;
-    if (!fc || !canvasEl) return;
-
-    const rect = canvasEl.getBoundingClientRect();
-    const vpt  = fc.viewportTransform ?? [1, 0, 0, 1, 0, 0];
-    const z    = fc.getZoom();
-    const sceneX = (e.clientX - rect.left  - vpt[4]) / z;
-    const sceneY = (e.clientY - rect.top   - vpt[5]) / z;
-
-    // Topmost object at click point (last in array = visually on top)
-    const sd  = useStore.getState();
-    const hit = [...sd.doc.objects].reverse().find(o =>
-      o.visible !== false &&
-      sceneX >= o.x && sceneX <= o.x + o.width &&
-      sceneY >= o.y && sceneY <= o.y + o.height,
-    );
-    setCtxMenu({ x: e.clientX, y: e.clientY, objId: hit?.id ?? null });
-  }, []);
-
   // ── Render ────────────────────────────────────────────────────────────
   return (
     <div
       ref={wrapRef}
       className="canvas-area canvas-checkerboard"
-      style={{ overflow: 'hidden', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      style={{ overflow: 'hidden', position: 'relative' }}
       onDrop={onDrop}
       onDragOver={e => { e.preventDefault(); setDropHighlight(true); }}
       onDragLeave={() => setDropHighlight(false)}
-      onContextMenu={onContextMenu}
     >
       {/* Drop overlay */}
       {dropHighlight && (
@@ -931,22 +996,16 @@ export default function CanvasArea() {
         </div>
       )}
 
-      {/* Fabric canvas */}
-      <div style={{
-        position: 'relative', flexShrink: 0,
-        boxShadow: '0 0 0 1px rgba(255,255,255,0.08), 0 12px 48px rgba(0,0,0,0.7)',
-        outline: '1px solid rgba(255,255,255,0.06)',
-      }}>
-        <canvas ref={canvasElRef} />
+      {/* Fabric canvas — fills wrapper; document is centered via viewport transform */}
+      <canvas ref={canvasElRef} style={{ position: 'absolute', inset: 0, display: 'block' }} />
 
-        {/* Rulers */}
-        {showRulers && (
-          <>
-            <RulerOverlay orientation="horizontal" size={Math.round(doc.width * zoom)} zoom={zoom} dpi={doc.dpi} docSize={doc.width} />
-            <RulerOverlay orientation="vertical"   size={Math.round(doc.height * zoom)} zoom={zoom} dpi={doc.dpi} docSize={doc.height} />
-          </>
-        )}
-      </div>
+      {/* Rulers — positioned at document boundary using docOffset */}
+      {showRulers && (
+        <>
+          <RulerOverlay orientation="horizontal" size={Math.round(doc.width * zoom)} zoom={zoom} dpi={doc.dpi} docSize={doc.width} offsetX={docOffset.x} offsetY={docOffset.y} />
+          <RulerOverlay orientation="vertical"   size={Math.round(doc.height * zoom)} zoom={zoom} dpi={doc.dpi} docSize={doc.height} offsetX={docOffset.x} offsetY={docOffset.y} />
+        </>
+      )}
 
       {/* Status bar */}
       <div style={{
@@ -1062,6 +1121,11 @@ function createFabricObject(
           map.set(obj.id, fImg); // set before add to prevent re-entry race
           fc.add(fImg);
           fc.renderAll();
+          // Restore selection if this object was selected when re-render started
+          if (useStore.getState().selectedId === obj.id) {
+            fc.setActiveObject(fImg);
+            fc.renderAll();
+          }
         })
         .catch(() => {
           // Fallback: plain textbox showing stripped content
@@ -1198,6 +1262,7 @@ function syncFabricProps(
     fObj.set({ fill: o.fillOpacity === 0 ? 'transparent' : o.fill });
     applyBorder(fObj, o.border);
   }
+  fObj.setCoords();
 }
 
 // ── Canvas context menu ───────────────────────────────────────────────────

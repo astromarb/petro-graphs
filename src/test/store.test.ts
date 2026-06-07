@@ -12,7 +12,7 @@ function makeImage(overrides?: Partial<CanvasObject>): CanvasObject {
     x: 10, y: 20, width: 100, height: 80,
     rotation: 0, locked: false, visible: true, label: 'Test image',
     border: { color: '#fff', width: 1, style: 'solid', radius: 0 },
-    showModeTag: true, tagPosition: 'tl', opacity: 1,
+    opacity: 1,
     adjustments: {
       flipX: false, flipY: false,
       brightness: 0, contrast: 0, saturation: 0, hue: 0,

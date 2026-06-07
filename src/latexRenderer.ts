@@ -51,13 +51,14 @@ export async function renderLatexToFabricImage(
 
   let dataUrl: string;
   try {
+    if (document.fonts?.ready) await document.fonts.ready;
     // html-to-image inlines all computed styles so the PNG renders correctly
     // even though KaTeX uses external CSS class rules
     dataUrl = await toPng(host, {
       width: w,
       height: h,
       pixelRatio: 2,
-      backgroundColor: 'transparent',
+      backgroundColor: 'rgba(0,0,0,0)',
     });
   } finally {
     document.body.removeChild(host);
