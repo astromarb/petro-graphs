@@ -1,57 +1,35 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
-import { get as idbGet, set as idbSet } from 'idb-keyval';
+import { persistSave, persistLoad } from './persistence';
 import type {
   CanvasDoc, CanvasObject, ImageGroup, ThinSectionImage, Tool, InsetPair, ImageCalibration,
 } from './types';
 
 // ── Persistence ────────────────────────────────────────────────────────────
-const IDB_KEY_V2 = 'petrofigure-state-v2';
-const IDB_KEY_V1 = 'petrofigure-state-v1';
 
 export interface PageData {
   doc: CanvasDoc;
   insets: InsetPair[];
 }
 
-interface PersistedState {
+export interface PersistedState {
   pages: PageData[];
   activePageId: string;
   groups: ImageGroup[];
 }
 
-function idbPersist(data: PersistedState) {
-  if (typeof indexedDB === 'undefined') return;
-  idbSet(IDB_KEY_V2, JSON.parse(JSON.stringify(data))).catch(() => {});
-}
-
-/** Serialize pages, merging live doc+insets for the active page. */
+/** Merge live doc+insets into the pages array and fire a debounced save. */
 function persistFromState(s: AppState) {
   const pages: PageData[] = (s.pages as PageData[]).map(p =>
     p.doc.id === s.activePageId
       ? { doc: s.doc as CanvasDoc, insets: s.insets as InsetPair[] }
       : p
   );
-  idbPersist({ pages, activePageId: s.activePageId, groups: s.groups as ImageGroup[] });
+  persistSave({ pages, activePageId: s.activePageId, groups: s.groups as ImageGroup[] });
 }
 
 export async function loadPersistedState(): Promise<PersistedState | null> {
-  try {
-    const v2 = await idbGet<PersistedState>(IDB_KEY_V2);
-    if (v2) return v2;
-    // Migrate from v1 schema
-    const v1 = await idbGet<{ doc: CanvasDoc; groups: ImageGroup[]; insets: InsetPair[] }>(IDB_KEY_V1);
-    if (v1) {
-      return {
-        pages: [{ doc: v1.doc, insets: v1.insets ?? [] }],
-        activePageId: v1.doc.id,
-        groups: v1.groups,
-      };
-    }
-    return null;
-  } catch {
-    return null;
-  }
+  return persistLoad();
 }
 
 type Snapshot = { objects: CanvasObject[]; insets: InsetPair[] };
