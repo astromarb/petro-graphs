@@ -1,0 +1,104 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'macos-latest'
+            args: '--target universal-apple-darwin'
+          - platform: 'ubuntu-22.04'
+            args: ''
+          - platform: 'windows-latest'
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Rust build cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # Optional Windows code signing.
+      # To enable: add WINDOWS_CERTIFICATE (base64 PFX) and WINDOWS_CERTIFICATE_PASSWORD
+      # to your repository secrets, then uncomment the block below.
+      #
+      # - name: Import Windows code-signing certificate
+      #   if: matrix.platform == 'windows-latest' && env.WINDOWS_CERTIFICATE != ''
+      #   env:
+      #     WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+      #     WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      #   shell: pwsh
+      #   run: |
+      #     $bytes = [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
+      #     [IO.File]::WriteAllBytes('codesign.pfx', $bytes)
+      #     $pwd = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+      #     Import-PfxCertificate -FilePath codesign.pfx -CertStoreLocation Cert:\CurrentUser\My -Password $pwd
+      #     Remove-Item codesign.pfx
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Petro Graphs ${{ github.ref_name }}'
+          releaseBody: |
+            ## Petro Graphs ${{ github.ref_name }}
+
+            Desktop application for compositing and annotating geological photomicrograph figures,
+            purpose-built for cross-polarized light (XPL/PPL) thin section photography.
+
+            ### Download and install
+
+            | Platform | File | Notes |
+            |---|---|---|
+            | **Windows 10/11** | `Petro-Graphs_..._x64-setup.exe` | Run the NSIS installer |
+            | **macOS (Universal)** | `Petro-Graphs_..._universal.dmg` | Open DMG, drag to Applications |
+            | **Linux (x64)** | `petro-graphs_..._amd64.AppImage` | `chmod +x`, then run |
+
+            ### First launch
+            - **Windows**: SmartScreen may warn about an unknown publisher — click **More info → Run anyway**
+            - **macOS**: Gatekeeper may block launch — right-click the app → **Open** → **Open**
+            - **Linux**: Requires a Wayland or X11 desktop environment with WebKit2GTK 4.1
+
+            > Built with Tauri v2, Rust, React 19, and Fabric.js 7.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}

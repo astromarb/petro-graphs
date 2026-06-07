@@ -35,6 +35,28 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "category": "Science",
+    "copyright": "© 2025 Marvin Alejandro Lopez Acevedo",
+    "longDescription": "Petro Graphs is a desktop application for compositing, annotating, and exporting geological photomicrograph figures. Purpose-built for cross-polarized light (XPL/PPL) thin section photography.",
+    "shortDescription": "Geological thin-section figure editor",
+    "publisher": "Marvin Alejandro Lopez Acevedo",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["English-US"],
+        "displayLanguageSelector": false
+      },
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "http://timestamp.digicert.com"
+    },
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    },
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    }
   }
 }
