@@ -6,7 +6,7 @@ import RightSidebar from './components/RightSidebar';
 import MetadataModal from './components/MetadataModal';
 import LayersPanel from './components/LayersPanel';
 import CalibrationModal from './components/CalibrationModal';
-import { useStore, loadPersistedState } from './store';
+import { useStore, loadPersistedState, saveProjectFile, openProjectFile } from './store';
 import type { Tool } from './types';
 
 const KEY_TOOL_MAP: Record<string, Tool> = {
@@ -28,6 +28,19 @@ export default function App() {
       if (saved) rehydrate(saved);
       setReady(true);
     });
+  }, []);
+
+  // Warn before tab close if there are unsaved changes
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      const { hasUnsavedChanges } = useStore.getState();
+      if (hasUnsavedChanges()) {
+        e.preventDefault();
+        e.returnValue = ''; // triggers browser's generic "Leave site?" dialog
+      }
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
   }, []);
 
   useEffect(() => {
@@ -67,6 +80,16 @@ export default function App() {
       if ((e.ctrlKey || e.metaKey) && e.key === 'd' && selectedId) {
         e.preventDefault();
         duplicateObject(selectedId);
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        saveProjectFile();
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.key === 'o') {
+        e.preventDefault();
+        openProjectFile().catch(() => {});
       }
     };
     window.addEventListener('keydown', handler);

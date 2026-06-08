@@ -8,11 +8,15 @@ import type {
 // ── Persistence ────────────────────────────────────────────────────────────
 const IDB_KEY = 'petrofigure-state-v1';
 
-interface PersistedState {
+export interface PersistedState {
   doc:    CanvasDoc;
   groups: ImageGroup[];
   insets: InsetPair[];
+  /** File format version for forward-compat */
+  version?: number;
 }
+
+const CURRENT_VERSION = 1;
 
 /** Save serialisable state to IndexedDB (fire-and-forget). */
 function persist(state: PersistedState) {
@@ -28,6 +32,47 @@ export async function loadPersistedState(): Promise<PersistedState | null> {
   } catch {
     return null;
   }
+}
+
+/** Download the current project as a .petrofig JSON file. */
+export function saveProjectFile() {
+  const { doc, groups, insets } = useStore.getState();
+  const payload: PersistedState = { doc, groups, insets, version: CURRENT_VERSION };
+  const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  const safe = doc.title.replace(/[^a-z0-9_-]/gi, '_') || 'project';
+  a.href     = url;
+  a.download = `${safe}.petrofig`;
+  a.click();
+  URL.revokeObjectURL(url);
+  useStore.getState().markSaved();
+}
+
+/** Open a .petrofig file and rehydrate the store from it. */
+export function openProjectFile(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement('input');
+    input.type   = 'file';
+    input.accept = '.petrofig,application/json';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) { resolve(); return; }
+      try {
+        const text = await file.text();
+        const data = JSON.parse(text) as PersistedState;
+        if (!data.doc || !Array.isArray(data.groups)) throw new Error('Invalid project file');
+        useStore.getState().rehydrate(data);
+        useStore.getState().markSaved();
+        // Also persist to IDB so it survives refresh
+        persist({ doc: data.doc, groups: data.groups, insets: data.insets ?? [] });
+        resolve();
+      } catch (e) {
+        reject(e);
+      }
+    };
+    input.click();
+  });
 }
 
 type Snapshot = { objects: CanvasObject[]; insets: InsetPair[] };
@@ -114,6 +159,11 @@ export interface AppState {
 
   /** Restore state from IndexedDB on app startup */
   rehydrate: (saved: PersistedState) => void;
+
+  /** Track whether there are unsaved changes since last explicit file save */
+  savedVersion:     number;
+  markSaved:        () => void;
+  hasUnsavedChanges: () => boolean;
 }
 
 const defaultDoc: CanvasDoc = {
@@ -147,7 +197,8 @@ export const useStore = create<AppState>()(
     }),
 
     rehydrate: (saved) => set((s) => {
-      s.doc    = saved.doc    as typeof s.doc;
+      // Merge doc to preserve any new fields added since the file was saved
+      Object.assign(s.doc, saved.doc);
       s.groups = saved.groups as typeof s.groups;
       s.insets = saved.insets as typeof s.insets;
     }),
@@ -315,5 +366,12 @@ export const useStore = create<AppState>()(
     toggleLayersPanel: () => set((s) => { s.showLayersPanel = !s.showLayersPanel; }),
     showRulers: false,
     toggleRulers: () => set((s) => { s.showRulers = !s.showRulers; }),
+
+    savedVersion: 0,
+    markSaved: () => set((s) => { s.savedVersion = s.past.length; }),
+    hasUnsavedChanges: () => {
+      const s = useStore.getState();
+      return s.past.length !== s.savedVersion || s.doc.objects.length > 0 || s.groups.length > 0;
+    },
   }))
 );

@@ -2,9 +2,9 @@ import React, { useState } from 'react';
 import {
   MousePointer2, Type, Square, Ruler, Hand, Crop,
   Download, Layers, Info, ZoomIn, ZoomOut, Maximize2,
-  Undo2, Redo2, Grid3x3,
+  Undo2, Redo2, Grid3x3, Save, FolderOpen,
 } from 'lucide-react';
-import { useStore } from '../store';
+import { useStore, saveProjectFile, openProjectFile } from '../store';
 import type { Tool } from '../types';
 import GridLayoutModal from './GridLayoutModal';
 import ExportModal from './ExportModal';
@@ -159,6 +159,28 @@ export default function Topbar() {
         <button className="btn-icon" title="Document metadata" onClick={toggleMetadataPanel}>
           <Info size={14} />
         </button>
+
+        <div className="sep" />
+
+        <button
+          className="btn btn-ghost"
+          title="Open project (Ctrl+O)"
+          style={{ fontSize: 12 }}
+          onClick={() => openProjectFile().catch(e => alert(`Could not open file: ${e.message}`))}
+        >
+          <FolderOpen size={13} /> Open
+        </button>
+        <button
+          className="btn btn-ghost"
+          title="Save project (Ctrl+S)"
+          style={{ fontSize: 12 }}
+          onClick={saveProjectFile}
+        >
+          <Save size={13} /> Save
+        </button>
+
+        <div className="sep" />
+
         <button
           className="btn btn-primary"
           title="Export figure"

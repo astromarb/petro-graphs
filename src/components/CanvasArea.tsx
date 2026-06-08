@@ -240,6 +240,9 @@ export default function CanvasArea() {
   const setToolRef = useRef(setTool);
   useEffect(() => { setToolRef.current = setTool; }, [setTool]);
 
+  // Used to trigger the sync effect after canvas init completes
+  const [fabricReady, setFabricReady] = useState(false);
+
   // ── Initialize Fabric canvas (once) ──────────────────────────────────
   useEffect(() => {
     if (!canvasElRef.current) return;
@@ -250,6 +253,7 @@ export default function CanvasArea() {
     });
     fabricRef.current = fc;
     sharedFabricRef.current = fc;
+    setFabricReady(true);
 
     fc.on('selection:created', () => {
       const sel = fc.getActiveObject() as fabric.FabricObject & { storeId?: string };
@@ -397,6 +401,7 @@ export default function CanvasArea() {
         });
         cropRectRef.current = rect;
         fc.add(rect);
+        fc.bringObjectToFront(rect); // ensure crop rect is above all images
         fc.setActiveObject(rect);
         fc.renderAll();
         return;
@@ -585,6 +590,8 @@ export default function CanvasArea() {
   }, []);
 
   // ── Sync store objects → Fabric canvas ───────────────────────────────
+  // fabricReady ensures this re-runs once after the canvas initializes,
+  // so rehydrated state (images loaded from IndexedDB) gets drawn.
   useEffect(() => {
     const fc = fabricRef.current;
     if (!fc) return;
@@ -670,7 +677,7 @@ export default function CanvasArea() {
     }
 
     fc.renderAll();
-  }, [doc.objects, groups]);
+  }, [doc.objects, groups, fabricReady]);
 
   // ── Sync connector lines ──────────────────────────────────────────────
   useEffect(() => {
@@ -788,10 +795,12 @@ export default function CanvasArea() {
     const srcImg = group?.images.find(i => i.id === parentObj.imageId);
     if (!srcImg) return;
 
-    const crLeft = cropRect.left ?? 0;
-    const crTop  = cropRect.top  ?? 0;
-    const crW    = (cropRect.width  ?? 100) * (cropRect.scaleX ?? 1);
-    const crH    = (cropRect.height ?? 100) * (cropRect.scaleY ?? 1);
+    // Use getBoundingRect for reliable coordinates after any resize/rotate transforms
+    const br   = cropRect.getBoundingRect();
+    const crLeft = br.left;
+    const crTop  = br.top;
+    const crW    = br.width;
+    const crH    = br.height;
 
     const relX = crLeft - parentObj.x;
     const relY = crTop  - parentObj.y;
@@ -866,6 +875,7 @@ export default function CanvasArea() {
     cropRectRef.current = null;
     setInsetPhase('idle');
     setInsetSourceId(null);
+    setToolRef.current('select'); // return to pointer after inset creation
   }, [insetSourceId, doc.objects, groups, addObject, addImageToGroup, addInset]);
 
   const cancelInset = useCallback(() => {
@@ -877,6 +887,7 @@ export default function CanvasArea() {
     }
     setInsetPhase('idle');
     setInsetSourceId(null);
+    setToolRef.current('select'); // return to pointer on cancel too
   }, []);
 
   // ── Render ────────────────────────────────────────────────────────────
