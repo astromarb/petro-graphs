@@ -32,9 +32,14 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
     const fc = fabricCanvasRef.current;
     if (!fc) return;
     try {
-      const zoom = fc.getZoom();
-      const multiplier = (1 / zoom) * 0.25; // ~25% preview
+      const currentZoom = fc.getZoom();
+      const savedVT = [...fc.viewportTransform] as [number,number,number,number,number,number];
+      fc.setViewportTransform([currentZoom, 0, 0, currentZoom, 0, 0]);
+      fc.renderAll();
+      const multiplier = 0.25 / currentZoom;
       const url = fc.toDataURL({ format: 'png', multiplier });
+      fc.setViewportTransform(savedVT);
+      fc.renderAll();
       if (prevBlobRef.current) URL.revokeObjectURL(prevBlobRef.current);
       setPreviewUrl(url);
     } catch { /* tainted canvas */ }
@@ -49,36 +54,31 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
       const outW = Math.round(doc.width  * (resOption <= 2 ? resOption : resOption / 96));
       const outH = Math.round(doc.height * (resOption <= 2 ? resOption : resOption / 96));
 
-      // Reset viewport to natural coordinates, render, then capture into an
-      // offscreen canvas at the exact desired output resolution. This avoids
-      // relying on Fabric's internal multiplier logic which can produce
-      // incorrect results when zoom/pan state is non-trivial.
-      const savedVT = [...fc.viewportTransform] as [number,number,number,number,number,number];
-      const savedW  = fc.width  ?? doc.width;
-      const savedH  = fc.height ?? doc.height;
+      // Strategy: never resize the Fabric canvas (resizing clears its pixel buffer).
+      // Instead, keep the current zoom and compute a multiplier that maps from
+      // canvas pixels → desired output pixels. Zero out only the pan offset so the
+      // document starts at (0,0), then restore afterward.
+      const currentZoom = fc.getZoom();
+      // canvas_px = scene_coord × zoom; output_px = scene_coord × (resOption/96)
+      // → multiplier = output_px / canvas_px = (resOption/96) / zoom
+      const multiplier = resOption <= 2
+        ? resOption / currentZoom
+        : (resOption / 96) / currentZoom;
 
-      fc.setViewportTransform([1, 0, 0, 1, 0, 0]);
-      fc.setDimensions({ width: doc.width, height: doc.height });
+      const savedVT = [...fc.viewportTransform] as [number,number,number,number,number,number];
+      // Zero the pan while preserving zoom so the document origin is at (0,0)
+      fc.setViewportTransform([currentZoom, 0, 0, currentZoom, 0, 0]);
       fc.renderAll();
 
       let dataUrl: string;
       try {
-        // Draw Fabric's canvas into an offscreen canvas at the desired output resolution
-        const srcCanvas = fc.getElement() as HTMLCanvasElement;
-        const dst = document.createElement('canvas');
-        dst.width  = outW;
-        dst.height = outH;
-        const ctx = dst.getContext('2d')!;
-        ctx.drawImage(srcCanvas, 0, 0, outW, outH);
-
-        const mimeType = format === 'pdf' ? 'image/jpeg' : `image/${format}`;
-        const q = format === 'pdf' ? 0.92 : (format === 'jpeg' ? quality : 1);
-        dataUrl = dst.toDataURL(mimeType, q);
+        const fmt = format === 'pdf' ? 'jpeg' : format;
+        const q   = format === 'pdf' ? 0.92 : quality;
+        dataUrl = fc.toDataURL({ format: fmt, quality: q, multiplier });
       } catch (e) {
-        throw new Error(`Canvas export failed (${(e as Error).message}).`);
+        throw new Error(`Canvas export failed: ${(e as Error).message}`);
       } finally {
         fc.setViewportTransform(savedVT);
-        fc.setDimensions({ width: savedW, height: savedH });
         fc.renderAll();
       }
 
