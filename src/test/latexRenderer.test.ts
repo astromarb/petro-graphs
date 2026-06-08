@@ -21,21 +21,27 @@ vi.mock('fabric', () => ({
   })),
 }));
 
+function makeMathJaxMock() {
+  return {
+    startup: { promise: Promise.resolve() },
+    tex2svg: vi.fn().mockImplementation(() => {
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('width', '5ex');
+      svg.setAttribute('height', '3ex');
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', 'M0 0');
+      path.setAttribute('fill', 'currentColor');
+      svg.appendChild(path);
+      const container = document.createElement('span');
+      container.appendChild(svg);
+      return container;
+    }),
+  };
+}
+
 beforeEach(() => {
   vi.resetModules();
-
-  vi.spyOn(document.body, 'appendChild').mockImplementation((node) => {
-    if (node instanceof HTMLElement) {
-      vi.spyOn(node, 'getBoundingClientRect').mockReturnValue({
-        width: 80, height: 24,
-        x: 0, y: 0, top: 0, left: 0,
-        right: 80, bottom: 24, toJSON: () => ({}),
-      } as DOMRect);
-    }
-    return node as Node;
-  });
-
-  vi.spyOn(document.body, 'removeChild').mockImplementation((node) => node as Node);
+  vi.stubGlobal('MathJax', makeMathJaxMock());
 });
 
 afterEach(() => {

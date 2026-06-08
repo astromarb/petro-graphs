@@ -886,10 +886,13 @@ export default function CanvasArea() {
       }
     });
 
-    // Enforce Fabric z-order to match store order (index 0 = back, last = front)
+    // Enforce Fabric z-order to match store order (index 0 = back, last = front).
+    // Guard: skip sentinel objects (plain {} used while LaTeX renders async) — Fabric's
+    // moveObjectTo inserts the object unconditionally even when it isn't in _objects yet,
+    // which corrupts _objects and causes "render is not a function" on the next renderAll.
     doc.objects.forEach((obj, idx) => {
       const fObj = objMapRef.current.get(obj.id);
-      if (fObj) (fc as fabric.Canvas & { moveObjectTo(obj: fabric.FabricObject, index: number): void }).moveObjectTo(fObj, idx);
+      if (fObj && 'storeId' in fObj) (fc as fabric.Canvas & { moveObjectTo(obj: fabric.FabricObject, index: number): void }).moveObjectTo(fObj, idx);
     });
     // Document background rect always stays below store objects
     if (docBgRef.current) fc.sendObjectToBack(docBgRef.current);

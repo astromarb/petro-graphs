@@ -144,3 +144,4 @@ petro-graphs/
 - The Rust build cache is large. The repo symlinks `src-tauri/target` → `D:\petro-graphs-target` to avoid filling the system drive. This symlink is machine-specific and is listed in `.gitignore`.
 - `npm run dev` runs the frontend only in a browser (no Tauri APIs). All canvas features work; native file dialogs do not.
 - Unit tests (`npm test`) run in jsdom and do not require Rust or Tauri.
+
