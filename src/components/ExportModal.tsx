@@ -29,20 +29,19 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
   const [exportDone, setExportDone] = useState(false);
   const prevBlobRef = useRef<string>('');
 
-  // Pre-render a small preview thumbnail of document space.
-  // Never resize the canvas — zero the pan and use a fractional multiplier instead.
+  // Pre-render a small preview thumbnail from the live canvas
   useEffect(() => {
     const fc = fabricCanvasRef.current;
     if (!fc) return;
     try {
-      const currentZoom = fc.getZoom();
-      const savedVT = [...(fc.viewportTransform ?? [1,0,0,1,0,0])] as [number,number,number,number,number,number];
-      fc.setViewportTransform([currentZoom, 0, 0, currentZoom, 0, 0]);
-      fc.renderAll();
-      const multiplier = 0.25 / currentZoom;
-      const url = fc.toDataURL({ format: 'png', multiplier });
-      fc.setViewportTransform(savedVT);
-      fc.renderAll();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const src = (fc as any).lowerCanvasEl as HTMLCanvasElement;
+      const scale = 0.25;
+      const dst = document.createElement('canvas');
+      dst.width  = Math.round(src.width  * scale);
+      dst.height = Math.round(src.height * scale);
+      dst.getContext('2d')!.drawImage(src, 0, 0, dst.width, dst.height);
+      const url = dst.toDataURL('image/png');
       if (prevBlobRef.current) URL.revokeObjectURL(prevBlobRef.current);
       setPreviewUrl(url);
     } catch { /* tainted canvas — skip preview */ }
@@ -55,16 +54,19 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
     setError('');
     setExportDone(false);
 
-    // Strategy: never resize the Fabric canvas (resizing clears its pixel buffer,
-    // producing a blank white export). Keep the current zoom, zero the pan so the
-    // document origin is at (0,0), and compute a multiplier:
-    //   output_px = canvas_px × multiplier
-    //   multiplier = (resOption/96) / currentZoom
-    const currentZoom = fc.getZoom();
-    const multiplier = resOption <= 2
-      ? resOption / currentZoom
-      : (resOption / 96) / currentZoom;
+    const outW = Math.round(doc.width  * (resOption <= 2 ? resOption : resOption / 96));
+    const outH = Math.round(doc.height * (resOption <= 2 ? resOption : resOption / 96));
 
+    // Strategy: capture lowerCanvasEl directly — this bypasses Fabric's internal
+    // toDataURL/toCanvasElement which breaks when objects use cached rendering
+    // (clipPaths, filters, etc.) at a different zoom than the export resolution.
+    //
+    // Approach:
+    //   1. Zero out pan (keep zoom) so the doc origin is at canvas pixel (0,0)
+    //   2. renderAll() on the live canvas — same path the user sees, always correct
+    //   3. drawImage() from lowerCanvasEl → offscreen canvas at outW×outH
+    //   4. Restore viewport
+    const currentZoom = fc.getZoom();
     const savedVT = [...(fc.viewportTransform ?? [1,0,0,1,0,0])] as [number,number,number,number,number,number];
 
     try {
@@ -79,9 +81,16 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
 
       let dataUrl: string;
       try {
-        const fmt = format === 'pdf' ? 'jpeg' : format;
-        const q   = format === 'pdf' ? 0.92 : quality;
-        dataUrl = fc.toDataURL({ format: fmt, quality: q, multiplier });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const src = (fc as any).lowerCanvasEl as HTMLCanvasElement;
+        const dst = document.createElement('canvas');
+        dst.width  = outW;
+        dst.height = outH;
+        const ctx = dst.getContext('2d')!;
+        ctx.drawImage(src, 0, 0, outW, outH);
+        const mime = format === 'pdf' ? 'image/jpeg' : `image/${format}`;
+        const q    = format === 'pdf' ? 0.92 : quality;
+        dataUrl = dst.toDataURL(mime, q);
       } catch (e) {
         throw new Error(`Canvas export failed: ${(e as Error).message}`);
       }
@@ -89,8 +98,6 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
       setProgress({ phase: 'Saving file…', pct: 85 });
       await new Promise<void>(r => setTimeout(r, 16));
 
-      const outW = Math.round(doc.width  * (resOption <= 2 ? resOption : resOption / 96));
-      const outH = Math.round(doc.height * (resOption <= 2 ? resOption : resOption / 96));
       const safeTitle = doc.title.replace(/[^a-z0-9_-]/gi, '_') || 'figure';
 
       if (format === 'pdf') {
