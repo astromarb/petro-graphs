@@ -29,22 +29,19 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
   const [exportDone, setExportDone] = useState(false);
   const prevBlobRef = useRef<string>('');
 
-  // Pre-render a small preview thumbnail of document space
+  // Pre-render a small preview thumbnail of document space.
+  // Never resize the canvas — zero the pan and use a fractional multiplier instead.
   useEffect(() => {
     const fc = fabricCanvasRef.current;
     if (!fc) return;
     try {
-      const { doc: previewDoc } = useStore.getState();
-      const previewMult = 0.25;
-      const savedPvpt = [...(fc.viewportTransform ?? [1,0,0,1,0,0])] as [number,number,number,number,number,number];
-      const savedPw = fc.width;
-      const savedPh = fc.height;
-      fc.setViewportTransform([previewMult, 0, 0, previewMult, 0, 0]);
-      fc.setDimensions({ width: Math.round(previewDoc.width * previewMult), height: Math.round(previewDoc.height * previewMult) });
-      fc.renderAll(); // flush paint at new dimensions before capture
-      const url = fc.toDataURL({ format: 'png', multiplier: 1 });
-      fc.setViewportTransform(savedPvpt);
-      fc.setDimensions({ width: savedPw ?? 800, height: savedPh ?? 600 });
+      const currentZoom = fc.getZoom();
+      const savedVT = [...(fc.viewportTransform ?? [1,0,0,1,0,0])] as [number,number,number,number,number,number];
+      fc.setViewportTransform([currentZoom, 0, 0, currentZoom, 0, 0]);
+      fc.renderAll();
+      const multiplier = 0.25 / currentZoom;
+      const url = fc.toDataURL({ format: 'png', multiplier });
+      fc.setViewportTransform(savedVT);
       fc.renderAll();
       if (prevBlobRef.current) URL.revokeObjectURL(prevBlobRef.current);
       setPreviewUrl(url);
@@ -58,20 +55,23 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
     setError('');
     setExportDone(false);
 
-    const outW = Math.round(doc.width  * (resOption <= 2 ? resOption : resOption / 96));
-    const outH = Math.round(doc.height * (resOption <= 2 ? resOption : resOption / 96));
-    const savedVpt = [...(fc.viewportTransform ?? [1,0,0,1,0,0])] as [number,number,number,number,number,number];
-    const savedW   = fc.width  ?? outW;
-    const savedH   = fc.height ?? outH;
+    // Strategy: never resize the Fabric canvas (resizing clears its pixel buffer,
+    // producing a blank white export). Keep the current zoom, zero the pan so the
+    // document origin is at (0,0), and compute a multiplier:
+    //   output_px = canvas_px × multiplier
+    //   multiplier = (resOption/96) / currentZoom
+    const currentZoom = fc.getZoom();
+    const multiplier = resOption <= 2
+      ? resOption / currentZoom
+      : (resOption / 96) / currentZoom;
+
+    const savedVT = [...(fc.viewportTransform ?? [1,0,0,1,0,0])] as [number,number,number,number,number,number];
 
     try {
       setProgress({ phase: 'Preparing canvas…', pct: 15 });
       await new Promise<void>(r => setTimeout(r, 16));
 
-      // Reset viewport to identity so export always captures the full document
-      // regardless of current zoom/pan state. Restore in the outer finally.
-      fc.setViewportTransform([1, 0, 0, 1, 0, 0]);
-      fc.setDimensions({ width: doc.width, height: doc.height });
+      fc.setViewportTransform([currentZoom, 0, 0, currentZoom, 0, 0]);
       fc.renderAll();
 
       setProgress({ phase: 'Encoding image…', pct: 55 });
@@ -79,23 +79,18 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
 
       let dataUrl: string;
       try {
-        // Offscreen canvas drawImage avoids Fabric's multiplier logic, which can
-        // produce incorrect output when zoom/pan state is non-trivial.
-        const srcCanvas = fc.getElement() as HTMLCanvasElement;
-        const dst = document.createElement('canvas');
-        dst.width  = outW;
-        dst.height = outH;
-        dst.getContext('2d')!.drawImage(srcCanvas, 0, 0, outW, outH);
-        const mimeType = format === 'pdf' ? 'image/jpeg' : `image/${format}`;
-        const q = format === 'pdf' ? 0.92 : (format === 'jpeg' ? quality : 1);
-        dataUrl = dst.toDataURL(mimeType, q);
+        const fmt = format === 'pdf' ? 'jpeg' : format;
+        const q   = format === 'pdf' ? 0.92 : quality;
+        dataUrl = fc.toDataURL({ format: fmt, quality: q, multiplier });
       } catch (e) {
-        throw new Error(`Canvas export failed (${(e as Error).message}). If you have LaTeX objects, try switching to plain text mode first.`);
+        throw new Error(`Canvas export failed: ${(e as Error).message}`);
       }
 
       setProgress({ phase: 'Saving file…', pct: 85 });
       await new Promise<void>(r => setTimeout(r, 16));
 
+      const outW = Math.round(doc.width  * (resOption <= 2 ? resOption : resOption / 96));
+      const outH = Math.round(doc.height * (resOption <= 2 ? resOption : resOption / 96));
       const safeTitle = doc.title.replace(/[^a-z0-9_-]/gi, '_') || 'figure';
 
       if (format === 'pdf') {
@@ -123,8 +118,7 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
       setError((e as Error).message);
       setProgress(null);
     } finally {
-      fc.setViewportTransform(savedVpt);
-      fc.setDimensions({ width: savedW, height: savedH });
+      fc.setViewportTransform(savedVT);
       fc.renderAll();
       setBusy(false);
     }
