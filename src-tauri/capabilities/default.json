@@ -34,8 +34,7 @@
         { "path": "$DOCUMENT/**" },
         { "path": "$DESKTOP/**" },
         { "path": "$DOWNLOAD/**" },
-        { "path": "**" },
-        { "path": "?:\\**" }
+        { "path": "**" }
       ]
     },
     {
@@ -46,8 +45,7 @@
         { "path": "$DOCUMENT/**" },
         { "path": "$DESKTOP/**" },
         { "path": "$DOWNLOAD/**" },
-        { "path": "**" },
-        { "path": "?:\\**" }
+        { "path": "**" }
       ]
     },
     { "identifier": "fs:allow-exists", "allow": [{ "path": "$APPLOCALDATA/**" }] },

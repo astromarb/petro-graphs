@@ -9,18 +9,25 @@ on:
 permissions:
   contents: write
 
+# Opt into Node.js 24 for all actions (Node.js 20 is deprecated on GitHub runners)
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   release:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: 'macos-latest'
+          - platform: 'macos-13'
             args: '--target universal-apple-darwin'
+            rust-targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
           - platform: 'ubuntu-22.04'
             args: ''
+            rust-targets: ''
           - platform: 'windows-latest'
             args: ''
+            rust-targets: ''
 
     runs-on: ${{ matrix.platform }}
 
@@ -45,7 +52,11 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.rust-targets }}
+
+      - name: Add macOS universal targets (belt-and-suspenders)
+        if: matrix.platform == 'macos-13'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       - name: Rust build cache
         uses: swatinem/rust-cache@v2
@@ -76,6 +87,7 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MACOSX_DEPLOYMENT_TARGET: '11.0'
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Petro Graphs ${{ github.ref_name }}'
