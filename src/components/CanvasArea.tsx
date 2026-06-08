@@ -604,6 +604,9 @@ export default function CanvasArea() {
     doc.objects.forEach(obj => {
       const existing = objMapRef.current.get(obj.id) as (fabric.FabricObject & { storeId?: string; _latexKey?: string }) | undefined;
       if (existing) {
+        // Sentinel: async render is in flight — don't sync or re-create yet
+        if (!('storeId' in existing)) return;
+
         // LaTeX images must be recreated when content, color, or fontSize changes
         if (obj.type === 'text' && (obj as TextObject).isLatex) {
           const o = obj as TextObject;
@@ -1021,13 +1024,18 @@ function createFabricObject(
   if (obj.type === 'text') {
     const o = obj as TextObject;
     if (o.isLatex) {
-      // Load SVG blob directly into FabricImage — avoids the canvas.toDataURL()
-      // taint issue that makes the intermediate-canvas path silently produce blank output.
       type LatexFabricImage = fabric.FabricImage & {
         storeId: string; _isLatexImg: boolean; _latexKey: string;
       };
+      // Reserve the map slot with a sentinel so concurrent sync-effect runs
+      // don't kick off a second render while this async one is in flight.
+      const sentinel = {} as fabric.FabricObject;
+      map.set(obj.id, sentinel);
+
       renderLatexToFabricImage(o.content, o.fontSize, o.color)
         .then(async (cached) => {
+          // Bail out if the object was deleted or superseded while we were rendering
+          if (map.get(obj.id) !== sentinel) return;
           const fImg = await cached.clone() as LatexFabricImage;
           const imgW = fImg.width ?? 100;
           const scale = imgW > 0 ? o.width / imgW : 1;
@@ -1044,6 +1052,7 @@ function createFabricObject(
           fc.renderAll();
         })
         .catch(() => {
+          if (map.get(obj.id) !== sentinel) return;
           // Fallback: plain textbox showing stripped content
           const stripped = o.content.replace(/\\[a-zA-Z]+\{([^}]*)\}/g, '$1').replace(/[\\{}]/g, '');
           const tb = new fabric.Textbox(stripped || o.content, {

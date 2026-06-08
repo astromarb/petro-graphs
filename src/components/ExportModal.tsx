@@ -53,34 +53,49 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
     setBusy(true);
     setError('');
     try {
-      const zoom       = fc.getZoom();
-      const multiplier = getMultiplier(zoom);
       const outW = Math.round(doc.width  * (resOption <= 2 ? resOption : resOption / 96));
       const outH = Math.round(doc.height * (resOption <= 2 ? resOption : resOption / 96));
+      // multiplier relative to the document's natural pixel size (ignore current zoom/pan)
+      const multiplier = resOption <= 2 ? resOption : resOption / 96;
+
+      // Reset viewport to identity so export always captures the full document
+      // regardless of current zoom/pan state, then restore afterward.
+      const savedVT = [...fc.viewportTransform] as [number,number,number,number,number,number];
+      const savedW  = fc.width;
+      const savedH  = fc.height;
+      fc.setViewportTransform([1, 0, 0, 1, 0, 0]);
+      fc.setDimensions({ width: doc.width, height: doc.height });
+      fc.renderAll();
 
       let dataUrl: string;
       try {
         dataUrl = fc.toDataURL({
-          format: format === 'pdf' ? 'png' : format,
-          quality,
+          format: format === 'pdf' ? 'jpeg' : format, // JPEG inside PDF = much smaller
+          quality: format === 'pdf' ? 0.92 : quality,
           multiplier,
         });
       } catch (e) {
-        throw new Error(`Canvas export failed (${(e as Error).message}). If you have LaTeX objects, try switching to plain text mode first.`);
+        throw new Error(`Canvas export failed (${(e as Error).message}).`);
+      } finally {
+        // Always restore the viewport
+        fc.setViewportTransform(savedVT);
+        fc.setDimensions({ width: savedW ?? doc.width, height: savedH ?? doc.height });
+        fc.renderAll();
       }
 
       const safeTitle = doc.title.replace(/[^a-z0-9_-]/gi, '_') || 'figure';
 
       if (format === 'pdf') {
-        // Determine page orientation
         const landscape = outW > outH;
+        // Use pt units with correct DPI conversion for smallest file size
+        const ptW = outW * 72 / (resOption <= 2 ? 96 * resOption : resOption);
+        const ptH = outH * 72 / (resOption <= 2 ? 96 * resOption : resOption);
         const pdf = new jsPDF({
           orientation: landscape ? 'landscape' : 'portrait',
-          unit: 'px',
-          format: [outW, outH],
-          hotfixes: ['px_scaling'],
+          unit: 'pt',
+          format: [ptW, ptH],
         });
-        pdf.addImage(dataUrl, 'PNG', 0, 0, outW, outH);
+        pdf.addImage(dataUrl, 'JPEG', 0, 0, ptW, ptH, undefined, 'FAST');
         pdf.save(`${safeTitle}.pdf`);
       } else {
         const a = document.createElement('a');
