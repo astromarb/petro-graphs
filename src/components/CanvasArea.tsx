@@ -208,8 +208,8 @@ export default function CanvasArea() {
   // ── Connector lines: pairId → {line, indicator} ──────────────────────
   const connectorMapRef = useRef<Map<string, { line: fabric.Line; indicator: fabric.Rect }>>(new Map());
 
-  // ── Mode tag labels: storeId → fabric.Text ───────────────────────────
-  const modeTagMapRef = useRef<Map<string, fabric.Text>>(new Map());
+  // ── Mode tag labels: storeId → { bg, tag } ───────────────────────────
+  const modeTagMapRef = useRef<Map<string, { bg: fabric.Rect; tag: fabric.Text }>>(new Map());
 
   // ── Refs to latest values (used in stable fabric event handlers) ──────
   const toolRef = useRef(tool);
@@ -637,43 +637,54 @@ export default function CanvasArea() {
       if (obj.type !== 'image') return;
       const o = obj as ImageObject;
       if (!o.showModeTag) {
-        // Remove tag if it exists
         const existing = modeTagMapRef.current.get(obj.id);
-        if (existing) { fc.remove(existing); modeTagMapRef.current.delete(obj.id); }
+        if (existing) {
+          fc.remove(existing.bg);
+          fc.remove(existing.tag);
+          modeTagMapRef.current.delete(obj.id);
+        }
         return;
       }
       liveTagIds.add(obj.id);
-      const tagText  = o.mode;
-      const pad = 4;
+      const tagText = o.mode;
+      const pad  = 4;
       const fSize = 11;
-      const tagW = tagText.length * fSize * 0.65 + pad * 2;
-      const tagH = fSize + pad * 2;
+      const tagW  = tagText.length * fSize * 0.65 + pad * 2;
+      const tagH  = fSize + pad * 2;
       const tp = o.tagPosition ?? 'tl';
-      const tx = tp === 'tl' || tp === 'bl' ? o.x + pad : o.x + o.width - tagW - pad;
+      const tx = tp === 'tl' || tp === 'bl' ? o.x + pad : o.x + o.width  - tagW - pad;
       const ty = tp === 'tl' || tp === 'tr' ? o.y + pad : o.y + o.height - tagH - pad;
       const existing = modeTagMapRef.current.get(obj.id);
       if (existing) {
-        existing.set({ left: tx, top: ty, text: tagText });
-        existing.setCoords();
+        existing.bg.set({ left: tx, top: ty, width: tagW, height: tagH });
+        existing.bg.setCoords();
+        existing.tag.set({ left: tx + pad, top: ty + pad, text: tagText });
+        existing.tag.setCoords();
       } else {
+        const bg = new fabric.Rect({
+          left: tx, top: ty, width: tagW, height: tagH,
+          fill: 'rgba(0,0,0,0.55)',
+          selectable: false, evented: false,
+        });
         const tag = new fabric.Text(tagText, {
-          left: tx, top: ty,
-          fontSize: fSize,
-          fontWeight: 'bold',
+          left: tx + pad, top: ty + pad,
+          fontSize: fSize, fontWeight: 'bold',
           fontFamily: 'Inter, system-ui, sans-serif',
           fill: '#ffffff',
-          backgroundColor: 'rgba(0,0,0,0.55)',
-          padding: pad,
-          selectable: false,
-          evented: false,
+          selectable: false, evented: false,
         });
+        fc.add(bg);
         fc.add(tag);
-        modeTagMapRef.current.set(obj.id, tag);
+        modeTagMapRef.current.set(obj.id, { bg, tag });
       }
     });
     // Remove tags for deleted/hidden objects
-    for (const [id, tag] of modeTagMapRef.current) {
-      if (!liveTagIds.has(id)) { fc.remove(tag); modeTagMapRef.current.delete(id); }
+    for (const [id, entry] of modeTagMapRef.current) {
+      if (!liveTagIds.has(id)) {
+        fc.remove(entry.bg);
+        fc.remove(entry.tag);
+        modeTagMapRef.current.delete(id);
+      }
     }
 
     fc.renderAll();
@@ -1019,6 +1030,7 @@ function createFabricObject(
     if (!img) return;
 
     fabric.FabricImage.fromURL(img.dataUrl).then((fImg) => {
+      if (!fc.getElement()) return; // canvas disposed
       const o = obj as ImageObject;
       fImg.set({ left: o.x, top: o.y, angle: o.rotation, opacity: o.opacity });
       fImg.scaleToWidth(o.width);
@@ -1045,9 +1057,10 @@ function createFabricObject(
 
       renderLatexToFabricImage(o.content, o.fontSize, o.color)
         .then(async (cached) => {
-          // Bail out if the object was deleted or superseded while we were rendering
           if (map.get(obj.id) !== sentinel) return;
+          if (!fc.getElement()) return; // canvas was disposed
           const fImg = await cached.clone() as LatexFabricImage;
+          if (!fImg || typeof fImg.render !== 'function') return; // safety check
           const imgW = fImg.width ?? 100;
           const scale = imgW > 0 ? o.width / imgW : 1;
           fImg.set({
@@ -1064,7 +1077,7 @@ function createFabricObject(
         })
         .catch(() => {
           if (map.get(obj.id) !== sentinel) return;
-          // Fallback: plain textbox showing stripped content
+          if (!fc.getElement()) return;
           const stripped = o.content.replace(/\\[a-zA-Z]+\{([^}]*)\}/g, '$1').replace(/[\\{}]/g, '');
           const tb = new fabric.Textbox(stripped || o.content, {
             left: o.x, top: o.y, width: o.width,
@@ -1144,8 +1157,11 @@ function createFabricObject(
 
     // Render label as LaTeX image and add below bar
     renderLatexToDataUrl(labelLatex, o.fontSize ?? 13, o.labelColor).then(({ dataUrl, width, height: _lh }) => {
-      if (!dataUrl || !fc.getObjects().includes(grp)) return;
+      if (!dataUrl || !fc.getElement()) return;
+      if (!fc.getObjects().includes(grp)) return;
       fabric.FabricImage.fromURL(dataUrl).then((lbl) => {
+        if (!lbl || typeof lbl.render !== 'function') return;
+        if (!fc.getElement()) return;
         const scale = Math.min(1, o.length / width);
         lbl.set({
           left: o.x + o.length / 2,

@@ -40,13 +40,6 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
     } catch { /* tainted canvas */ }
   }, []);
 
-  const getMultiplier = (zoom: number): number => {
-    if (resOption === 1) return 1 / zoom;
-    if (resOption === 2) return 2 / zoom;
-    // DPI-based: screen is 96 dpi, target is resOption
-    return (resOption / 96) / zoom;
-  };
-
   const doExport = async () => {
     const fc = fabricCanvasRef.current;
     if (!fc) return;
@@ -55,31 +48,37 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
     try {
       const outW = Math.round(doc.width  * (resOption <= 2 ? resOption : resOption / 96));
       const outH = Math.round(doc.height * (resOption <= 2 ? resOption : resOption / 96));
-      // multiplier relative to the document's natural pixel size (ignore current zoom/pan)
-      const multiplier = resOption <= 2 ? resOption : resOption / 96;
 
-      // Reset viewport to identity so export always captures the full document
-      // regardless of current zoom/pan state, then restore afterward.
+      // Reset viewport to natural coordinates, render, then capture into an
+      // offscreen canvas at the exact desired output resolution. This avoids
+      // relying on Fabric's internal multiplier logic which can produce
+      // incorrect results when zoom/pan state is non-trivial.
       const savedVT = [...fc.viewportTransform] as [number,number,number,number,number,number];
-      const savedW  = fc.width;
-      const savedH  = fc.height;
+      const savedW  = fc.width  ?? doc.width;
+      const savedH  = fc.height ?? doc.height;
+
       fc.setViewportTransform([1, 0, 0, 1, 0, 0]);
       fc.setDimensions({ width: doc.width, height: doc.height });
       fc.renderAll();
 
       let dataUrl: string;
       try {
-        dataUrl = fc.toDataURL({
-          format: format === 'pdf' ? 'jpeg' : format, // JPEG inside PDF = much smaller
-          quality: format === 'pdf' ? 0.92 : quality,
-          multiplier,
-        });
+        // Draw Fabric's canvas into an offscreen canvas at the desired output resolution
+        const srcCanvas = fc.getElement() as HTMLCanvasElement;
+        const dst = document.createElement('canvas');
+        dst.width  = outW;
+        dst.height = outH;
+        const ctx = dst.getContext('2d')!;
+        ctx.drawImage(srcCanvas, 0, 0, outW, outH);
+
+        const mimeType = format === 'pdf' ? 'image/jpeg' : `image/${format}`;
+        const q = format === 'pdf' ? 0.92 : (format === 'jpeg' ? quality : 1);
+        dataUrl = dst.toDataURL(mimeType, q);
       } catch (e) {
         throw new Error(`Canvas export failed (${(e as Error).message}).`);
       } finally {
-        // Always restore the viewport
         fc.setViewportTransform(savedVT);
-        fc.setDimensions({ width: savedW ?? doc.width, height: savedH ?? doc.height });
+        fc.setDimensions({ width: savedW, height: savedH });
         fc.renderAll();
       }
 

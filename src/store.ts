@@ -18,10 +18,17 @@ export interface PersistedState {
 
 const CURRENT_VERSION = 1;
 
-/** Save serialisable state to IndexedDB (fire-and-forget). */
+let _persistTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Save serialisable state to IndexedDB — debounced 400 ms to avoid write-per-keystroke. */
 function persist(state: PersistedState) {
   if (typeof indexedDB === 'undefined') return; // jsdom / SSR guard
-  idbSet(IDB_KEY, JSON.parse(JSON.stringify(state))).catch(() => {/* quota/private mode */});
+  if (_persistTimer) clearTimeout(_persistTimer);
+  const snapshot = JSON.parse(JSON.stringify(state));
+  _persistTimer = setTimeout(() => {
+    _persistTimer = null;
+    idbSet(IDB_KEY, snapshot).catch(() => {/* quota/private mode */});
+  }, 400);
 }
 
 /** Load previously saved state from IndexedDB. Returns null on first run or error. */
