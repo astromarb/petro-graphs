@@ -7,7 +7,7 @@ import RightSidebar from './components/RightSidebar';
 import MetadataModal from './components/MetadataModal';
 import LayersPanel from './components/LayersPanel';
 import CalibrationModal from './components/CalibrationModal';
-import { useStore, loadPersistedState } from './store';
+import { useStore, loadPersistedState, saveProjectFile, openProjectFile } from './store';
 import { isDesktop, saveProject, saveProjectAs, openProject } from './fileOps';
 import type { Tool } from './types';
 
@@ -31,6 +31,19 @@ export default function App() {
       if (saved) rehydrate(saved);
       setReady(true);
     });
+  }, []);
+
+  // Warn before tab close if there are unsaved changes
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      const { hasUnsavedChanges } = useStore.getState();
+      if (hasUnsavedChanges()) {
+        e.preventDefault();
+        e.returnValue = ''; // triggers browser's generic "Leave site?" dialog
+      }
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
   }, []);
 
   useEffect(() => {
@@ -72,20 +85,25 @@ export default function App() {
         duplicateObject(selectedId);
       }
 
-      // Native file ops (desktop only)
-      if (isDesktop() && (e.ctrlKey || e.metaKey)) {
-        if (e.key.toLowerCase() === 's') {
-          e.preventDefault();
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (isDesktop()) {
           const op = e.shiftKey ? saveProjectAs() : saveProject();
           op.then(p => { if (p) setCurrentFilePath(p); })
             .catch(err => console.error('[PetroGraphing] Save failed:', err));
-          return;
+        } else {
+          saveProjectFile();
         }
-        if (e.key.toLowerCase() === 'o') {
-          e.preventDefault();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'o') {
+        e.preventDefault();
+        if (isDesktop()) {
           openProject().catch(err => console.error('[PetroGraphing] Open failed:', err));
-          return;
+        } else {
+          openProjectFile().catch(() => {});
         }
+        return;
       }
     };
     window.addEventListener('keydown', handler);

@@ -16,10 +16,59 @@ export interface PersistedState {
   pages: PageData[];
   activePageId: string;
   groups: ImageGroup[];
+  /** File format version for forward-compat */
+  version?: number;
 }
+
+const CURRENT_VERSION = 1;
 
 export async function loadPersistedState(): Promise<PersistedState | null> {
   return persistLoad();
+}
+
+/** Download the current project as a .petrofig JSON file. */
+export function saveProjectFile() {
+  const s = useStore.getState();
+  const pages = (s.pages as PageData[]).map(p =>
+    p.doc.id === s.activePageId
+      ? { doc: s.doc as CanvasDoc, insets: s.insets as InsetPair[] }
+      : p
+  );
+  const payload: PersistedState = { pages, activePageId: s.activePageId, groups: s.groups as ImageGroup[], version: CURRENT_VERSION };
+  const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  const safe = s.doc.title.replace(/[^a-z0-9_-]/gi, '_') || 'project';
+  a.href     = url;
+  a.download = `${safe}.petrofig`;
+  a.click();
+  URL.revokeObjectURL(url);
+  s.markSaved();
+}
+
+/** Open a .petrofig file and rehydrate the store from it. */
+export function openProjectFile(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement('input');
+    input.type   = 'file';
+    input.accept = '.petrofig,application/json';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) { resolve(); return; }
+      try {
+        const text = await file.text();
+        const data = JSON.parse(text) as PersistedState;
+        if (!Array.isArray(data.pages) || !Array.isArray(data.groups)) throw new Error('Invalid project file');
+        useStore.getState().rehydrate(data);
+        useStore.getState().markSaved();
+        persistSave(data);
+        resolve();
+      } catch (e) {
+        reject(e);
+      }
+    };
+    input.click();
+  });
 }
 
 type Snapshot = { objects: CanvasObject[]; insets: InsetPair[] };
@@ -126,6 +175,11 @@ export interface AppState {
   setCurrentFilePath: (path: string | null) => void;
 
   rehydrate: (saved: PersistedState) => void;
+
+  /** Track whether there are unsaved changes since last explicit file save */
+  savedVersion:     number;
+  markSaved:        () => void;
+  hasUnsavedChanges: () => boolean;
 }
 
 const defaultDoc: CanvasDoc = {
@@ -232,7 +286,8 @@ export const useStore = create<AppState>()(
       s.activePageId = saved.activePageId;
       s.groups       = saved.groups       as typeof s.groups;
       const activePg = saved.pages.find(p => p.doc.id === saved.activePageId) ?? saved.pages[0];
-      s.doc    = activePg.doc    as typeof s.doc;
+      // Use Object.assign to preserve any new fields added since the file was saved
+      Object.assign(s.doc, activePg.doc);
       s.insets = activePg.insets as typeof s.insets;
     }),
 
@@ -433,6 +488,13 @@ export const useStore = create<AppState>()(
 
     currentFilePath: null,
     setCurrentFilePath: (path) => set((s) => { s.currentFilePath = path; }),
+
+    savedVersion: 0,
+    markSaved: () => set((s) => { s.savedVersion = s.past.length; }),
+    hasUnsavedChanges: () => {
+      const s = useStore.getState();
+      return s.past.length !== s.savedVersion || s.doc.objects.length > 0 || s.groups.length > 0;
+    },
   }))
 );
 

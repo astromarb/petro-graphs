@@ -66,11 +66,13 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
 
     try {
       setProgress({ phase: 'Preparing canvas…', pct: 15 });
-      await new Promise<void>(r => setTimeout(r, 16)); // yield to React to paint progress
+      await new Promise<void>(r => setTimeout(r, 16));
 
-      const exportScale = outW / doc.width;
-      fc.setViewportTransform([exportScale, 0, 0, exportScale, 0, 0]);
-      fc.setDimensions({ width: outW, height: outH });
+      const multiplier = resOption <= 2 ? resOption : resOption / 96;
+      // Reset viewport to identity so export always captures the full document
+      // regardless of current zoom/pan state, then restore in the outer finally.
+      fc.setViewportTransform([1, 0, 0, 1, 0, 0]);
+      fc.setDimensions({ width: doc.width, height: doc.height });
       fc.renderAll();
 
       setProgress({ phase: 'Encoding image…', pct: 55 });
@@ -79,9 +81,9 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
       let dataUrl: string;
       try {
         dataUrl = fc.toDataURL({
-          format: format === 'pdf' ? 'png' : format,
-          quality,
-          multiplier: 1,
+          format: format === 'pdf' ? 'jpeg' : format,
+          quality: format === 'pdf' ? 0.92 : quality,
+          multiplier,
         });
       } catch (e) {
         throw new Error(`Canvas export failed (${(e as Error).message}). If you have LaTeX objects, try switching to plain text mode first.`);
@@ -93,14 +95,15 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
       const safeTitle = doc.title.replace(/[^a-z0-9_-]/gi, '_') || 'figure';
 
       if (format === 'pdf') {
-        const ptW = doc.width  * 72 / doc.dpi;
-        const ptH = doc.height * 72 / doc.dpi;
+        const landscape = outW > outH;
+        const ptW = outW * 72 / (resOption <= 2 ? 96 * resOption : resOption);
+        const ptH = outH * 72 / (resOption <= 2 ? 96 * resOption : resOption);
         const pdf = new jsPDF({
-          orientation: ptW > ptH ? 'landscape' : 'portrait',
+          orientation: landscape ? 'landscape' : 'portrait',
           unit: 'pt',
           format: [ptW, ptH],
         });
-        pdf.addImage(dataUrl, 'PNG', 0, 0, ptW, ptH);
+        pdf.addImage(dataUrl, 'JPEG', 0, 0, ptW, ptH, undefined, 'FAST');
         pdf.save(`${safeTitle}.pdf`);
       } else {
         const a = document.createElement('a');

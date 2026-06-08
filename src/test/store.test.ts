@@ -337,3 +337,58 @@ describe('TextObject LaTeX fields', () => {
     expect((stored as typeof txt).isLatex).toBe(false);
   });
 });
+
+describe('tool auto-return to select', () => {
+  beforeEach(resetStore);
+
+  it('setTool switches tool correctly', () => {
+    useStore.getState().setTool('text');
+    expect(useStore.getState().tool).toBe('text');
+    useStore.getState().setTool('select');
+    expect(useStore.getState().tool).toBe('select');
+  });
+
+  it('tool can be reset to select after inset', () => {
+    useStore.getState().setTool('inset');
+    expect(useStore.getState().tool).toBe('inset');
+    // Simulate what confirmInset / cancelInset does
+    useStore.getState().setTool('select');
+    expect(useStore.getState().tool).toBe('select');
+  });
+
+  it('tool can be reset to select after shape placement', () => {
+    useStore.getState().setTool('shape');
+    useStore.getState().setTool('select');
+    expect(useStore.getState().tool).toBe('select');
+  });
+});
+
+describe('project persistence helpers', () => {
+  beforeEach(resetStore);
+
+  it('rehydrate restores doc title and groups', () => {
+    const { rehydrate } = useStore.getState();
+    const restoredDoc = { ...useStore.getState().doc, title: 'Restored Project' };
+    rehydrate({
+      pages: [{ doc: restoredDoc, insets: [] }],
+      activePageId: restoredDoc.id,
+      groups: [{ id: 'g1', name: 'Sample A', sample: '', images: [], expanded: true }],
+    });
+    expect(useStore.getState().doc.title).toBe('Restored Project');
+    expect(useStore.getState().groups).toHaveLength(1);
+    expect(useStore.getState().groups[0].name).toBe('Sample A');
+  });
+
+  it('rehydrate restores canvas objects', () => {
+    const obj = makeImage();
+    const { rehydrate } = useStore.getState();
+    const docWithObj = { ...useStore.getState().doc, objects: [obj] };
+    rehydrate({
+      pages: [{ doc: docWithObj, insets: [] }],
+      activePageId: docWithObj.id,
+      groups: [],
+    });
+    expect(useStore.getState().doc.objects).toHaveLength(1);
+    expect(useStore.getState().doc.objects[0].id).toBe(obj.id);
+  });
+});

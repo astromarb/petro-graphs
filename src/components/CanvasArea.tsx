@@ -284,6 +284,9 @@ export default function CanvasArea() {
   const setToolRef = useRef(setTool);
   useEffect(() => { setToolRef.current = setTool; }, [setTool]);
 
+  // Used to trigger the sync effect after canvas init completes
+  const [fabricReady, setFabricReady] = useState(false);
+
   // ── Initialize Fabric canvas (once) ──────────────────────────────────
   useEffect(() => {
     if (!canvasElRef.current) return;
@@ -319,6 +322,7 @@ export default function CanvasArea() {
     docBgRef.current = docBg;
     _docBg = docBg;
     viewportInitRef.current = false;
+    setFabricReady(true); // signal sync effect that canvas is ready (triggers initial draw of rehydrated state)
 
     fc.on('selection:created', () => {
       const sel = fc.getActiveObject() as fabric.FabricObject & { storeId?: string };
@@ -496,6 +500,7 @@ export default function CanvasArea() {
         });
         cropRectRef.current = rect;
         fc.add(rect);
+        fc.bringObjectToFront(rect); // ensure crop rect is above all images
         fc.setActiveObject(rect);
         fc.renderAll();
         return;
@@ -803,6 +808,8 @@ export default function CanvasArea() {
   }, []);
 
   // ── Sync store objects → Fabric canvas ───────────────────────────────
+  // fabricReady ensures this re-runs once after the canvas initializes,
+  // so rehydrated state (images loaded from IndexedDB) gets drawn.
   useEffect(() => {
     const fc = fabricRef.current;
     if (!fc) return;
@@ -823,7 +830,10 @@ export default function CanvasArea() {
       type ExtFabricObj = fabric.FabricObject & { storeId?: string; _latexKey?: string; _sbKey?: string };
       const existing = objMapRef.current.get(obj.id) as ExtFabricObj | undefined;
       if (existing) {
-        // LaTeX text: recreate when content/color/fontSize changes
+        // Sentinel: async render is in flight — don't sync or re-create yet
+        if (!('storeId' in existing)) return;
+
+        // LaTeX images must be recreated when content, color, fontSize, or weight changes
         if (obj.type === 'text' && (obj as TextObject).isLatex) {
           const o = obj as TextObject;
           const newKey = `${o.content}||${o.fontSize}||${o.color}||${o.fontWeight ?? 'normal'}`;
@@ -881,7 +891,7 @@ export default function CanvasArea() {
     if (docBgRef.current) fc.sendObjectToBack(docBgRef.current);
 
     fc.renderAll();
-  }, [doc.objects, groups]);
+  }, [doc.objects, groups, fabricReady]);
 
   // ── Sync connector lines ──────────────────────────────────────────────
   useEffect(() => {
@@ -999,10 +1009,12 @@ export default function CanvasArea() {
     const srcImg = group?.images.find(i => i.id === parentObj.imageId);
     if (!srcImg) return;
 
-    const crLeft = cropRect.left ?? 0;
-    const crTop  = cropRect.top  ?? 0;
-    const crW    = (cropRect.width  ?? 100) * (cropRect.scaleX ?? 1);
-    const crH    = (cropRect.height ?? 100) * (cropRect.scaleY ?? 1);
+    // Use getBoundingRect for reliable coordinates after any resize/rotate transforms
+    const br   = cropRect.getBoundingRect();
+    const crLeft = br.left;
+    const crTop  = br.top;
+    const crW    = br.width;
+    const crH    = br.height;
 
     const relX = crLeft - parentObj.x;
     const relY = crTop  - parentObj.y;
@@ -1079,6 +1091,7 @@ export default function CanvasArea() {
     cropRectRef.current = null;
     setInsetPhase('idle');
     setInsetSourceId(null);
+    setToolRef.current('select'); // return to pointer after inset creation
   }, [insetSourceId, doc.objects, groups, addObject, addImageToGroup, addInset]);
 
   const cancelInset = useCallback(() => {
@@ -1090,6 +1103,7 @@ export default function CanvasArea() {
     }
     setInsetPhase('idle');
     setInsetSourceId(null);
+    setToolRef.current('select'); // return to pointer on cancel too
   }, []);
 
   // ── Render ────────────────────────────────────────────────────────────
@@ -1280,8 +1294,6 @@ function createFabricObject(
   if (obj.type === 'text') {
     const o = obj as TextObject;
     if (o.isLatex) {
-      // Load SVG blob directly into FabricImage — avoids the canvas.toDataURL()
-      // taint issue that makes the intermediate-canvas path silently produce blank output.
       type LatexFabricImage = fabric.FabricImage & {
         storeId: string; _isLatexImg: boolean; _latexKey: string;
       };
@@ -1289,32 +1301,31 @@ function createFabricObject(
       // Guard: skip if an identical render is already in-flight
       if (latexGeneration.get(obj.id) === renderKey) return;
       latexGeneration.set(obj.id, renderKey);
+      // Reserve the map slot with a sentinel so concurrent sync-effect runs
+      // don't kick off a second render while this async one is in flight.
+      const sentinel = {} as fabric.FabricObject;
+      map.set(obj.id, sentinel);
 
       // Bold: wrap the LaTeX source in \boldsymbol{} so MathJax renders it bold
       const renderContent = o.fontWeight === 'bold' ? `\\boldsymbol{${o.content}}` : o.content;
       renderLatexToFabricImage(renderContent, o.fontSize, o.color, true)
         .then(async (cached) => {
-          // Check if the store content changed while we were rendering
+          // Bail out if object was deleted or superseded while rendering
+          if (map.get(obj.id) !== sentinel) {
+            latexGeneration.delete(obj.id);
+            return;
+          }
           const storeState = useStore.getState();
           const storeObj   = storeState.doc.objects.find(s => s.id === obj.id) as TextObject | undefined;
           const currentKey = storeObj
             ? `${storeObj.content}||${storeObj.fontSize}||${storeObj.color}||${storeObj.fontWeight ?? 'normal'}`
             : null;
-
           if (currentKey !== renderKey) {
-            // This render is outdated. Only restart if no newer render is already in flight.
-            const currentInFlight = latexGeneration.get(obj.id);
             latexGeneration.delete(obj.id);
-            if (storeObj?.isLatex && currentInFlight !== currentKey) {
-              createFabricObject(storeObj, storeState.groups, fc, map);
-            }
+            if (storeObj?.isLatex) createFabricObject(storeObj, storeState.groups, fc, map);
             return;
           }
-
           latexGeneration.delete(obj.id);
-          // Remove any stale duplicate that another race might have placed
-          const dup = map.get(obj.id);
-          if (dup) fc.remove(dup);
 
           const fImg = await cached.clone() as LatexFabricImage;
           // Scale by height so math renders at exactly fontSize pixels tall.
@@ -1344,6 +1355,7 @@ function createFabricObject(
           }
         })
         .catch(() => {
+          if (map.get(obj.id) !== sentinel) return;
           // Fallback: plain textbox showing stripped content
           latexGeneration.delete(obj.id);
           const stripped = o.content.replace(/\\[a-zA-Z]+\{([^}]*)\}/g, '$1').replace(/[\\{}]/g, '');

@@ -4,7 +4,7 @@ import {
   Download, Layers, Info, ZoomIn, ZoomOut, Maximize2,
   Undo2, Redo2, FolderOpen, Save, LayoutGrid,
 } from 'lucide-react';
-import { useStore } from '../store';
+import { useStore, saveProjectFile, openProjectFile } from '../store';
 import type { Tool } from '../types';
 import ExportModal from './ExportModal';
 import GridDialog from './GridDialog';
@@ -302,6 +302,32 @@ export default function Topbar() {
         <button className="btn-icon" title="Document metadata" onClick={toggleMetadataPanel}>
           <Info size={14} />
         </button>
+
+        {/* Browser fallback Save/Open — shown on non-desktop only (desktop has native file ops above) */}
+        {!desktop && (
+          <>
+            <div className="sep" />
+            <button
+              className="btn btn-ghost"
+              title="Open project (Ctrl+O)"
+              style={{ fontSize: 12 }}
+              onClick={() => openProjectFile().catch(e => alert(`Could not open file: ${(e as Error).message}`))}
+            >
+              <FolderOpen size={13} /> Open
+            </button>
+            <button
+              className="btn btn-ghost"
+              title="Save project (Ctrl+S)"
+              style={{ fontSize: 12 }}
+              onClick={saveProjectFile}
+            >
+              <Save size={13} /> Save
+            </button>
+          </>
+        )}
+
+        <div className="sep" />
+
         <button
           className="btn btn-primary"
           title="Export figure"
