@@ -1,9 +1,6 @@
 # Petro Graphs
 
 A desktop application for compositing and annotating geological photomicrograph figures. Built with React, TypeScript, Fabric.js, and Tauri.
-
-Developed at Vanderbilt University in support of master's thesis research on aplite dike geobarometry in the Tuolumne Intrusive Complex (Yosemite National Park).
-
 ---
 
 ## Features
@@ -52,74 +49,6 @@ Already included on Windows 10 (version 1803+) and Windows 11. If missing, downl
 The first build downloads and compiles Rust dependencies (~3–5 GB). By default this project symlinks `src-tauri/target/` to `D:\petro-graphs-target` to keep the build cache off the system drive. If you do not have a D: drive, either:
 - Create the directory `D:\petro-graphs-target` manually, or
 - Delete the symlink and let cargo create `src-tauri/target/` locally (ensure at least 6 GB free on your system drive)
-
----
-
-## Development
-
-### Install dependencies
-```
-npm install
-```
-
-### Run in development mode (hot reload)
-```
-npm run tauri:dev
-```
-This starts the Vite dev server and opens the app in a native window. Changes to frontend code reload live; Rust backend changes require a recompile.
-
-### Run frontend only (browser, no native features)
-```
-npm run dev
-```
-
----
-
-## Building a Release Executable
-
-```
-npm run tauri:build
-```
-
-This produces:
-- `src-tauri/target/release/petro-graphs.exe` — standalone executable
-- `src-tauri/target/release/bundle/nsis/` — Windows installer (`.exe`)
-- `src-tauri/target/release/bundle/msi/` — Windows installer (`.msi`)
-
-The bundled installer includes the WebView2 bootstrapper if the runtime is not already present on the target machine.
-
----
-
-## App Icon
-
-The app icon files live in `src-tauri/icons/`. To replace the default icon with a custom one:
-
-1. Prepare a square PNG at 1024×1024 px
-2. Run:
-   ```
-   npm run tauri icon path/to/your-icon.png
-   ```
-   This auto-generates all required sizes (`32x32.png`, `128x128.png`, `icon.ico`, `icon.icns`).
-
----
-
-## Project Structure
-
-```
-petro-graphs/
-├── src/                    # React + TypeScript frontend
-│   ├── components/         # UI components (Canvas, Sidebar, Topbar, etc.)
-│   ├── store.ts            # Zustand state management
-│   ├── types.ts            # Shared TypeScript types
-│   └── latexRenderer.ts    # KaTeX → Fabric.js image renderer
-├── src-tauri/              # Tauri / Rust backend
-│   ├── src/lib.rs          # App entry point, plugin registration
-│   ├── tauri.conf.json     # App config (name, window size, identifier)
-│   ├── capabilities/       # Permission declarations for native APIs
-│   └── icons/              # App icon assets
-├── public/                 # Static assets
-└── package.json
-```
 
 ---
 
