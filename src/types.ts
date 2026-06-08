@@ -11,6 +11,7 @@ export interface ImageCalibration {
   refRealLength: number;
 }
 
+
 export interface ThinSectionImage {
   id: string;
   mode: ImageMode;

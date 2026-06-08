@@ -6,10 +6,54 @@
   "permissions": [
     "core:default",
     "fs:default",
-    { "identifier": "fs:allow-read-file",  "allow": [{ "path": "$APPLOCALDATA/**" }, { "path": "$HOME/**" }] },
-    { "identifier": "fs:allow-write-file", "allow": [{ "path": "$APPLOCALDATA/**" }, { "path": "$HOME/**" }] },
-    { "identifier": "fs:allow-exists",     "allow": [{ "path": "$APPLOCALDATA/**" }] },
-    { "identifier": "fs:allow-mkdir",      "allow": [{ "path": "$APPLOCALDATA/**" }] },
-    "dialog:default"
+    {
+      "identifier": "fs:allow-read-file",
+      "allow": [
+        { "path": "$APPLOCALDATA/**" },
+        { "path": "$HOME/**" },
+        { "path": "$DOCUMENT/**" },
+        { "path": "$DESKTOP/**" },
+        { "path": "$DOWNLOAD/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-read-text-file",
+      "allow": [
+        { "path": "$APPLOCALDATA/**" },
+        { "path": "$HOME/**" },
+        { "path": "$DOCUMENT/**" },
+        { "path": "$DESKTOP/**" },
+        { "path": "$DOWNLOAD/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-write-file",
+      "allow": [
+        { "path": "$APPLOCALDATA/**" },
+        { "path": "$HOME/**" },
+        { "path": "$DOCUMENT/**" },
+        { "path": "$DESKTOP/**" },
+        { "path": "$DOWNLOAD/**" },
+        { "path": "**" },
+        { "path": "?:\\**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-write-text-file",
+      "allow": [
+        { "path": "$APPLOCALDATA/**" },
+        { "path": "$HOME/**" },
+        { "path": "$DOCUMENT/**" },
+        { "path": "$DESKTOP/**" },
+        { "path": "$DOWNLOAD/**" },
+        { "path": "**" },
+        { "path": "?:\\**" }
+      ]
+    },
+    { "identifier": "fs:allow-exists", "allow": [{ "path": "$APPLOCALDATA/**" }] },
+    { "identifier": "fs:allow-mkdir",  "allow": [{ "path": "$APPLOCALDATA/**" }] },
+    "dialog:default",
+    "dialog:allow-save",
+    "dialog:allow-open"
   ]
 }

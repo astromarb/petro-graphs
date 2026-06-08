@@ -9,7 +9,7 @@
   <line x1="82"  y1="240" x2="430" y2="240" stroke="#c9a84c" stroke-width="3.5" opacity="0.38"/>
   <line x1="256" y1="66"  x2="256" y2="414" stroke="#c9a84c" stroke-width="3.5" opacity="0.38"/>
 
-  <!-- Four crystal extinction sectors -->
+  <!-- Four crystal extinction sectors (alternating brightness) -->
   <path d="M256 240 L256 66  A174 174 0 0 1 430 240 Z" fill="#c9a84c" opacity="0.072"/>
   <path d="M256 240 L430 240 A174 174 0 0 1 256 414 Z" fill="#c9a84c" opacity="0.030"/>
   <path d="M256 240 L256 414 A174 174 0 0 1 82  240 Z" fill="#c9a84c" opacity="0.072"/>
@@ -27,7 +27,7 @@
     letter-spacing="-4"
   >PG</text>
 
-  <!-- Scale bar accent -->
+  <!-- Scale bar accent (references the app's core feature) -->
   <g transform="translate(256, 458)">
     <rect x="-46" y="-3.5" width="92" height="7" rx="3.5" fill="#c9a84c" opacity="0.82"/>
     <rect x="-50" y="-10"  width="7"  height="20" rx="2"   fill="#c9a84c" opacity="0.82"/>

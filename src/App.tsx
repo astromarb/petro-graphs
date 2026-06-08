@@ -17,7 +17,7 @@ const KEY_TOOL_MAP: Record<string, Tool> = {
 
 export default function App() {
   const {
-    setTool, setZoom, zoom,
+    setTool, setZoom, zoom, fitView,
     selectedId, removeObject, duplicateObject,
     undo, redo, past, future, rehydrate,
     setCurrentFilePath,
@@ -61,7 +61,7 @@ export default function App() {
 
       if (e.key === '=' || e.key === '+') setZoom(zoom + 0.1);
       if (e.key === '-') setZoom(zoom - 0.1);
-      if (e.key === '0') setZoom(1);
+      if (e.key === '0') fitView();
 
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) {
         removeObject(selectedId);
@@ -76,16 +76,14 @@ export default function App() {
       if (isDesktop() && (e.ctrlKey || e.metaKey)) {
         if (e.key.toLowerCase() === 's') {
           e.preventDefault();
-          if (e.shiftKey) {
-            saveProjectAs().then(p => { if (p) setCurrentFilePath(p); });
-          } else {
-            saveProject().then(p => { if (p) setCurrentFilePath(p); });
-          }
+          const op = e.shiftKey ? saveProjectAs() : saveProject();
+          op.then(p => { if (p) setCurrentFilePath(p); })
+            .catch(err => console.error('[PetroGraphing] Save failed:', err));
           return;
         }
         if (e.key.toLowerCase() === 'o') {
           e.preventDefault();
-          openProject();
+          openProject().catch(err => console.error('[PetroGraphing] Open failed:', err));
           return;
         }
       }
@@ -96,7 +94,7 @@ export default function App() {
 
   if (!ready) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0e0f14', color: 'var(--text-muted)', fontSize: 13 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0d0b08', color: 'var(--text-muted)', fontSize: 13 }}>
         Loading…
       </div>
     );

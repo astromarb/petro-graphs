@@ -225,12 +225,12 @@ function ImagePanel({ obj, update, dpi }: { obj: ImageObject; update: (p: Partia
     const metersPerCanvasPx = canvasUnitsPerPx * (UNIT_METERS[cal.unit] ?? 1e-6);
     const sb: SBO = {
       id: nanoid(), type: 'scalebar',
-      x: obj.x + 10, y: obj.y + obj.height - 40,
+      x: obj.x + obj.width - canvasPx - 10, y: obj.y + 10,
       width: canvasPx, height: 36,
       rotation: 0, locked: false, visible: true,
       label: `${realLength} ${unit}`,
       length: canvasPx, realLength, unit,
-      color: '#ffffff', labelColor: '#ffffff', thickness: 4,
+      color: '#000000', labelColor: '#000000', thickness: 4,
       fontSize: ptToPx(8, dpi),
       metersPerCanvasPx,
       parentImageId: obj.id,

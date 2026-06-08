@@ -12,14 +12,16 @@ import { nanoid, niceScaleBar, UNIT_METERS, ptToPx } from '../utils';
 import { renderLatexToFabricImage } from '../latexRenderer';
 import { sharedFabricRef } from '../fabricRef';
 
-// Tracks in-flight LaTeX renders: objId → key currently being rendered.
-// Prevents duplicate Fabric images when the user types faster than rendering.
-const latexInFlight = new Map<string, string>();
+// In-flight render guard for LaTeX: objId → renderKey string currently rendering.
+// Prevents duplicate renders when font/color changes fire rapidly.
+const latexGeneration = new Map<string, string>();
 // Prevents selection:cleared from closing the sidebar during LaTeX Fabric object recreation
 let suppressSelectionClear = false;
 // Current tool — written by the component, read by the module-level createFabricObject.
 // Needed because createFabricObject is module-scoped and cannot access component refs.
 let _activeTool = 'select';
+// Module-level reference to the docBg rect so async image callbacks can enforce z-order.
+let _docBg: fabric.Rect | null = null;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -182,7 +184,7 @@ export default function CanvasArea() {
 
   const {
     doc, groups, addObject, setSelectedId,
-    tool, setTool, zoom, setZoom, setPan,
+    tool, setTool, zoom, setZoom, setPan, fitViewRequest,
     insets, addInset,
     addImageToGroup,
     selectedId, showRulers,
@@ -278,17 +280,20 @@ export default function CanvasArea() {
       fc.renderAll();
     });
     ro.observe(wrap);
-    // Document background rect — always behind store objects
+    // Document background rect — always behind store objects, permanently locked
     const docBg = new fabric.Rect({
       left: 0, top: 0,
       width: useStore.getState().doc.width,
       height: useStore.getState().doc.height,
       fill: useStore.getState().doc.background,
       selectable: false, evented: false, hoverCursor: 'default', strokeWidth: 0,
+      lockMovementX: true, lockMovementY: true,
+      hasControls: false, hasBorders: false,
     });
     (docBg as fabric.Rect & { isDocBackground: boolean }).isDocBackground = true;
     fc.add(docBg);
     docBgRef.current = docBg;
+    _docBg = docBg;
     viewportInitRef.current = false;
 
     fc.on('selection:created', () => {
@@ -322,15 +327,35 @@ export default function CanvasArea() {
           o => o.type === 'scalebar' && (o as import('../types').ScaleBarObject).parentImageId === fObj.storeId,
         );
         if (linkedBars.length > 0) {
-          state.batchUpdateObjects(linkedBars.map(sb => ({
-            id: sb.id,
-            patch: {
-              length: Math.max(10, Math.round((sb as import('../types').ScaleBarObject).length * scaleRatio)),
-              x: Math.round(sb.x + dx),
-              y: Math.round(sb.y + dy),
-            } as Partial<import('../types').CanvasObject>,
-          })));
+          state.batchUpdateObjects(linkedBars.map(sb => {
+            const sbo = sb as import('../types').ScaleBarObject;
+            const newLen = Math.max(10, Math.round(sbo.length * scaleRatio));
+            return {
+              id: sb.id,
+              patch: {
+                length: newLen,
+                width:  newLen,
+                x: Math.round(sb.x + dx),
+                y: Math.round(sb.y + dy),
+                metersPerCanvasPx: sbo.metersPerCanvasPx != null
+                  ? sbo.metersPerCanvasPx / scaleRatio
+                  : undefined,
+              } as Partial<import('../types').CanvasObject>,
+            };
+          }));
         }
+      }
+
+      // LaTeX images: back-calculate container x from alignment offset, skip width update
+      const isLatexImg = (fObj as any)._isLatexImg === true;
+      if (isLatexImg && prevObj?.type === 'text' && (prevObj as TextObject).isLatex) {
+        const prevText = prevObj as TextObject;
+        const renderedW = (fObj.width ?? 0) * (fObj.scaleX ?? 1);
+        let containerX = newX;
+        if (prevText.align === 'center') containerX -= (prevText.width - renderedW) / 2;
+        if (prevText.align === 'right')  containerX -= (prevText.width - renderedW);
+        state.updateObject(fObj.storeId, { x: containerX, y: newY, rotation: fObj.angle ?? 0 });
+        return;
       }
 
       state.updateObject(fObj.storeId, { x: newX, y: newY, width: newW, height: newH, rotation: fObj.angle ?? 0 });
@@ -382,13 +407,13 @@ export default function CanvasArea() {
         const { doc: placeDock } = useStore.getState();
         useStore.getState().addObject({
           id: nanoid(), type: 'scalebar',
-          x: Math.round(pt.x - canvasPx / 2),
-          y: Math.round(pt.y),
+          x: Math.round(imgObj.x + imgObj.width - canvasPx - 10),
+          y: Math.round(imgObj.y + 10),
           width: canvasPx, height: 36,
           rotation: 0, locked: false, visible: true,
           label: `${realLength} ${unit}`,
           length: canvasPx, realLength, unit,
-          color: '#ffffff', labelColor: '#ffffff', thickness: 4,
+          color: '#000000', labelColor: '#000000', thickness: 4,
           fontSize: ptToPx(8, placeDock.dpi),
           metersPerCanvasPx,
           parentImageId: imgObj.id,
@@ -411,20 +436,30 @@ export default function CanvasArea() {
       // ── Inset: click on an image to begin crop selection ─────────────
       if (currentTool === 'inset') {
         if (insetPhaseRef.current === 'selecting') return;
-        if (!target?.storeId) return;
-        const storeObj = useStore.getState().doc.objects.find(o => o.id === target.storeId);
-        if (!storeObj || storeObj.type !== 'image') return;
 
-        setInsetSourceId(target.storeId);
+        // skipTargetFind=true during inset mode, so we hit-test manually
+        const pt2 = getScenePt(fc, options);
+        if (!pt2) return;
+        const { doc: sd2 } = useStore.getState();
+        const hitObj = [...sd2.objects].reverse().find(o =>
+          o.type === 'image' &&
+          pt2.x >= o.x && pt2.x <= o.x + o.width &&
+          pt2.y >= o.y && pt2.y <= o.y + o.height,
+        );
+        if (!hitObj) return;
+
+        setInsetSourceId(hitObj.id);
         setInsetPhase('selecting');
 
-        const defaultW = storeObj.width * 0.45;
-        const defaultH = storeObj.height * 0.45;
+        const defaultW = hitObj.width  * 0.45;
+        const defaultH = hitObj.height * 0.45;
+        // Use originX/Y 'left'/'top' so left/top = top-left corner (read by confirmInset)
         const rect = new fabric.Rect({
-          left:   storeObj.x + storeObj.width  * 0.275,
-          top:    storeObj.y + storeObj.height * 0.275,
+          left:   hitObj.x + hitObj.width  * 0.275,
+          top:    hitObj.y + hitObj.height * 0.275,
           width:  defaultW,
           height: defaultH,
+          originX: 'left', originY: 'top',
           fill:   'rgba(170,59,255,0.10)',
           stroke: '#aa3bff',
           strokeWidth: 2,
@@ -496,6 +531,28 @@ export default function CanvasArea() {
     setZoom(Math.max(0.05, Math.min(4, fitZoom)));
   }, [doc.width, doc.height, setZoom]);
 
+  // ── Fit-to-screen: re-centers and computes fit-zoom (triggered by store signal) ──
+  useEffect(() => {
+    if (fitViewRequest === 0) return; // skip initial mount
+    const fc = fabricRef.current;
+    const wrap = wrapRef.current;
+    if (!fc || !wrap) return;
+    const { doc: sd } = useStore.getState();
+    const cw = wrap.clientWidth;
+    const ch = wrap.clientHeight;
+    const padded = 0.92;
+    const fitZoom = Math.max(0.1, Math.min(4,
+      Math.min((cw * padded) / sd.width, (ch * padded) / sd.height),
+    ));
+    const tx = (cw - sd.width  * fitZoom) / 2;
+    const ty = (ch - sd.height * fitZoom) / 2;
+    fc.setViewportTransform([fitZoom, 0, 0, fitZoom, tx, ty]);
+    fc.renderAll();
+    setDocOffset({ x: tx, y: ty });
+    viewportInitRef.current = true; // mark as initialized so zoom effect won't re-apply
+    setZoom(fitZoom);
+  }, [fitViewRequest, setZoom]);
+
   // ── Canvas size, zoom & background ───────────────────────────────────────
   // Zoom effect: update viewport transform (canvas element size is managed by ResizeObserver)
   useEffect(() => {
@@ -544,18 +601,38 @@ export default function CanvasArea() {
   useEffect(() => {
     const fc = fabricRef.current;
     if (!fc) return;
+
     if (tool === 'pan') {
       fc.defaultCursor = 'grab';
       fc.selection = false;
-    } else if (['text', 'shape', 'scalebar', 'inset'].includes(tool)) {
+      fc.skipTargetFind = true;
+    } else if (tool === 'inset' && insetPhase === 'selecting') {
+      // Crop-rect phase: allow interacting with the crop rect only
+      fc.defaultCursor = 'default';
+      fc.selection = false;
+      fc.skipTargetFind = false;
+      fc.getObjects().forEach(fObj => {
+        const isCrop = fObj === cropRectRef.current;
+        fObj.selectable = isCrop;
+        fObj.evented    = isCrop;
+      });
+      fc.renderAll();
+      return; // skip generic object-toggle below
+    } else if (['text', 'shape', 'inset'].includes(tool)) {
       fc.defaultCursor = 'crosshair';
       fc.selection = false;
+      fc.skipTargetFind = true;
+    } else if (tool === 'scalebar') {
+      fc.defaultCursor = 'default'; // click-to-place, not draw
+      fc.selection = false;
+      fc.skipTargetFind = true;
     } else {
       fc.defaultCursor = 'default';
       fc.selection = true;
+      fc.skipTargetFind = false;
     }
+
     const isSelect = tool === 'select';
-    fc.skipTargetFind = !isSelect; // pan/draw tools must not drag objects
     fc.getObjects().forEach(fObj => {
       if (fObj === cropRectRef.current) return;
       fObj.selectable = isSelect;
@@ -563,7 +640,7 @@ export default function CanvasArea() {
     });
     if (tool === 'pan') fc.discardActiveObject();
     fc.renderAll();
-  }, [tool]);
+  }, [tool, insetPhase]);
 
   // ── Pan with mouse ────────────────────────────────────────────────────
   useEffect(() => {
@@ -635,10 +712,24 @@ export default function CanvasArea() {
       toolRef.current = restore;
       const fc = fabricRef.current;
       if (!fc) return;
-      if      (restore === 'pan')   { fc.defaultCursor = 'grab'; fc.selection = false; fc.skipTargetFind = true; }
-      else if (['text','shape','scalebar','inset'].includes(restore))
-                                    { fc.defaultCursor = 'crosshair'; fc.selection = false; fc.skipTargetFind = true; }
-      else                          { fc.defaultCursor = 'default'; fc.selection = true; fc.skipTargetFind = false; }
+      if (restore === 'pan') {
+        fc.defaultCursor = 'grab'; fc.selection = false; fc.skipTargetFind = true;
+      } else if (restore === 'inset' && insetPhaseRef.current === 'selecting') {
+        // Restore interactive crop-rect mode
+        fc.defaultCursor = 'default'; fc.selection = false; fc.skipTargetFind = false;
+        fc.getObjects().forEach(o => {
+          const isCrop = o === cropRectRef.current;
+          (o as fabric.FabricObject).selectable = isCrop;
+          (o as fabric.FabricObject).evented    = isCrop;
+        });
+        return;
+      } else if (['text','shape','inset'].includes(restore)) {
+        fc.defaultCursor = 'crosshair'; fc.selection = false; fc.skipTargetFind = true;
+      } else if (restore === 'scalebar') {
+        fc.defaultCursor = 'default'; fc.selection = false; fc.skipTargetFind = true;
+      } else {
+        fc.defaultCursor = 'default'; fc.selection = true; fc.skipTargetFind = false;
+      }
       const wasSelect = restore === 'select';
       fc.getObjects().forEach(o => {
         if (o === cropRectRef.current) return;
@@ -702,10 +793,10 @@ export default function CanvasArea() {
         // LaTeX text: recreate when content/color/fontSize changes
         if (obj.type === 'text' && (obj as TextObject).isLatex) {
           const o = obj as TextObject;
-          const newKey = `${o.content}||${o.fontSize}||${o.color}`;
+          const newKey = `${o.content}||${o.fontSize}||${o.color}||${o.fontWeight ?? 'normal'}`;
           if (existing._latexKey !== newKey) {
             // Only kick off a new render if not already rendering this exact key
-            if (latexInFlight.get(obj.id) !== newKey) {
+            if (latexGeneration.get(obj.id) !== newKey) {
               suppressSelectionClear = true;
               fc.remove(existing);
               suppressSelectionClear = false;
@@ -726,7 +817,7 @@ export default function CanvasArea() {
           fc.remove(existing);
           suppressSelectionClear = false;
           objMapRef.current.delete(obj.id);
-          latexInFlight.delete(obj.id);
+          latexGeneration.delete(obj.id);
           createFabricObject(obj, groups, fc, objMapRef.current);
           return;
         }
@@ -937,13 +1028,13 @@ export default function CanvasArea() {
       const metersPerCanvasPx = canvasUnitsPerPx * (UNIT_METERS[cal.unit] ?? 1e-6);
       const sb: ScaleBarObject = {
         id: nanoid(), type: 'scalebar',
-        x: insetObj.x + 10,
-        y: insetObj.y + insetObj.height - 40,
+        x: insetObj.x + insetObj.width - canvasPx - 10,
+        y: insetObj.y + 10,
         width: canvasPx, height: 36,
         rotation: 0, locked: false, visible: true,
         label: `${realLength} ${unit}`,
         length: canvasPx, realLength, unit,
-        color: '#ffffff', labelColor: '#ffffff', thickness: 4,
+        color: '#000000', labelColor: '#000000', thickness: 4,
         fontSize: ptToPx(8, useStore.getState().doc.dpi),
         metersPerCanvasPx,
         parentImageId: insetObj.id,
@@ -1116,12 +1207,24 @@ function createFabricObject(
       .then((fImg) => {
         const o = obj as ImageObject;
         fImg.set({ left: o.x, top: o.y, angle: o.rotation, opacity: o.opacity });
-        fImg.scaleToWidth(Math.max(1, o.width));
+        const _nW = fImg.width  ?? 1;
+        const _nH = fImg.height ?? 1;
+        (fImg as any)._naturalWidth  = _nW;
+        (fImg as any)._naturalHeight = _nH;
+        fImg.set({ scaleX: Math.max(1, o.width) / _nW, scaleY: o.height / _nH });
         if (o.border) applyBorder(fImg, o.border);
         applyAdjustments(fImg, o.adjustments ?? DEFAULT_ADJUSTMENTS);
         (fImg as typeof fImg & { storeId: string }).storeId = obj.id;
         fc.add(fImg);
         map.set(obj.id, fImg);
+        // Re-enforce z-order: async add puts image at the top of the Fabric stack.
+        // Move it to its correct store index and keep docBg at absolute bottom.
+        const storeIdx = useStore.getState().doc.objects.findIndex(o2 => o2.id === obj.id);
+        if (storeIdx >= 0) {
+          (fc as fabric.Canvas & { moveObjectTo(o: fabric.FabricObject, i: number): void })
+            .moveObjectTo(fImg, storeIdx + 1); // +1 because docBg occupies index 0
+        }
+        if (_docBg) fc.sendObjectToBack(_docBg);
         fc.renderAll();
       })
       .catch((err) => {
@@ -1138,30 +1241,33 @@ function createFabricObject(
       type LatexFabricImage = fabric.FabricImage & {
         storeId: string; _isLatexImg: boolean; _latexKey: string;
       };
-      const renderKey = `${o.content}||${o.fontSize}||${o.color}`;
+      const renderKey = `${o.content}||${o.fontSize}||${o.color}||${o.fontWeight ?? 'normal'}`;
       // Guard: skip if an identical render is already in-flight
-      if (latexInFlight.get(obj.id) === renderKey) return;
-      latexInFlight.set(obj.id, renderKey);
+      if (latexGeneration.get(obj.id) === renderKey) return;
+      latexGeneration.set(obj.id, renderKey);
 
-      renderLatexToFabricImage(o.content, o.fontSize, o.color, true)
+      // Bold: wrap the LaTeX source in \boldsymbol{} so MathJax renders it bold
+      const renderContent = o.fontWeight === 'bold' ? `\\boldsymbol{${o.content}}` : o.content;
+      renderLatexToFabricImage(renderContent, o.fontSize, o.color, true)
         .then(async (cached) => {
           // Check if the store content changed while we were rendering
           const storeState = useStore.getState();
           const storeObj   = storeState.doc.objects.find(s => s.id === obj.id) as TextObject | undefined;
           const currentKey = storeObj
-            ? `${storeObj.content}||${storeObj.fontSize}||${storeObj.color}`
+            ? `${storeObj.content}||${storeObj.fontSize}||${storeObj.color}||${storeObj.fontWeight ?? 'normal'}`
             : null;
 
           if (currentKey !== renderKey) {
-            // Content changed — restart with the latest content if the object still exists
-            latexInFlight.delete(obj.id);
-            if (storeObj?.isLatex) {
+            // This render is outdated. Only restart if no newer render is already in flight.
+            const currentInFlight = latexGeneration.get(obj.id);
+            latexGeneration.delete(obj.id);
+            if (storeObj?.isLatex && currentInFlight !== currentKey) {
               createFabricObject(storeObj, storeState.groups, fc, map);
             }
             return;
           }
 
-          latexInFlight.delete(obj.id);
+          latexGeneration.delete(obj.id);
           // Remove any stale duplicate that another race might have placed
           const dup = map.get(obj.id);
           if (dup) fc.remove(dup);
@@ -1171,9 +1277,13 @@ function createFabricObject(
           // The SVG was rendered at 2× pixel ratio so scale ≈ 0.5 at natural size.
           const imgH = fImg.height ?? 30;
           const scale = imgH > 0 ? (o.fontSize || 20) / imgH : 1;
+          const renderedW = scale * (fImg.width ?? 0);
+          let alignLeft = o.x;
+          if (o.align === 'center') alignLeft = o.x + (o.width - renderedW) / 2;
+          if (o.align === 'right')  alignLeft = o.x + (o.width - renderedW);
           const isSelectNow = _activeTool === 'select';
           fImg.set({
-            left: o.x, top: o.y, angle: o.rotation,
+            left: alignLeft, top: o.y, angle: o.rotation,
             scaleX: scale, scaleY: scale,
             selectable: isSelectNow, evented: isSelectNow,
           });
@@ -1191,7 +1301,7 @@ function createFabricObject(
         })
         .catch(() => {
           // Fallback: plain textbox showing stripped content
-          latexInFlight.delete(obj.id);
+          latexGeneration.delete(obj.id);
           const stripped = o.content.replace(/\\[a-zA-Z]+\{([^}]*)\}/g, '$1').replace(/[\\{}]/g, '');
           const tb = new fabric.Textbox(stripped || o.content, {
             left: o.x, top: o.y, width: o.width,
@@ -1240,26 +1350,30 @@ function createFabricObject(
 
   if (obj.type === 'scalebar') {
     const o = obj as ScaleBarObject;
-    const capH = Math.round(o.thickness * 4.5); // taller caps for clear start/end markers
-    const capOff = Math.round((capH - o.thickness) / 2);
+    const capH   = Math.round(o.thickness * 4.5);
+    const halfLen = o.length / 2;
+    const halfCapH = capH / 2;
+    const t = Math.max(1, o.thickness);
 
+    // Fabric v7 default originX/Y = 'center', so left/top = CENTER of the object
+    // in the group's local space (0,0 = group center).
     const bar = new fabric.Rect({
-      left: 0, top: capOff,
+      left: 0, top: 0,
       width: o.length, height: o.thickness,
       fill: o.color, stroke: '', strokeWidth: 0,
     });
     const capL = new fabric.Rect({
-      left: 0, top: 0,
-      width: Math.max(1, o.thickness), height: capH,
+      left: -halfLen + t / 2, top: 0,
+      width: t, height: capH,
       fill: o.color, stroke: '', strokeWidth: 0,
     });
     const capR = new fabric.Rect({
-      left: o.length - Math.max(1, o.thickness), top: 0,
-      width: Math.max(1, o.thickness), height: capH,
+      left:  halfLen - t / 2, top: 0,
+      width: t, height: capH,
       fill: o.color, stroke: '', strokeWidth: 0,
     });
     const label = new fabric.Text(`${o.realLength} ${o.unit}`, {
-      left: o.length / 2, top: capH + 4,
+      left: 0, top: halfCapH + 4,
       fontSize: o.fontSize ?? 13,
       fill: o.labelColor,
       fontFamily: 'Inter, system-ui, sans-serif',
@@ -1296,17 +1410,26 @@ function syncFabricProps(
 ) {
   fObj.set({ left: obj.x, top: obj.y, angle: obj.rotation, visible: obj.visible, selectable: !obj.locked });
 
+  // LaTeX images: apply horizontal alignment offset within the container width
+  if (obj.type === 'text' && (fObj as any)._isLatexImg === true) {
+    const o = obj as TextObject;
+    const renderedW = (fObj.width ?? 0) * (fObj.scaleX ?? 1);
+    let alignLeft = o.x;
+    if (o.align === 'center') alignLeft = o.x + (o.width - renderedW) / 2;
+    if (o.align === 'right')  alignLeft = o.x + (o.width - renderedW);
+    fObj.set({ left: alignLeft });
+  }
+
   if (obj.type === 'image') {
     const o = obj as ImageObject;
-    fObj.set({
-      scaleX: o.width  / (fObj.width  || o.width),
-      scaleY: o.height / (fObj.height || o.height),
-      opacity: o.opacity,
-    });
-    applyBorder(fObj, o.border);
     if (fObj instanceof fabric.FabricImage) {
+      const naturalW = (fObj as any)._naturalWidth  ?? fObj.width  ?? 1;
+      const naturalH = (fObj as any)._naturalHeight ?? fObj.height ?? 1;
+      fObj.set({ scaleX: Math.max(1, o.width) / naturalW, scaleY: o.height / naturalH });
       applyAdjustments(fObj, o.adjustments ?? DEFAULT_ADJUSTMENTS);
     }
+    fObj.set({ opacity: o.opacity });
+    applyBorder(fObj, o.border);
   }
 
   if (obj.type === 'text') {

@@ -108,6 +108,8 @@ export interface AppState {
   panX:   number;
   panY:   number;
   setPan: (x: number, y: number) => void;
+  fitViewRequest: number;
+  fitView: () => void;
 
   // UI
   showMetadataPanel:    boolean;
@@ -415,6 +417,8 @@ export const useStore = create<AppState>()(
     setZoom: (z) => set((s) => { s.zoom = Math.max(0.1, Math.min(4, z)); }),
     panX: 0, panY: 0,
     setPan: (x, y) => set((s) => { s.panX = x; s.panY = y; }),
+    fitViewRequest: 0,
+    fitView: () => set((s) => { s.fitViewRequest = s.fitViewRequest + 1; }),
 
     showMetadataPanel: false,
     toggleMetadataPanel: () => set((s) => { s.showMetadataPanel = !s.showMetadataPanel; }),

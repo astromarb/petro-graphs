@@ -10,6 +10,8 @@ import ExportModal from './ExportModal';
 import GridDialog from './GridDialog';
 import { sharedFabricRef } from '../fabricRef';
 import { isDesktop, saveProject, saveProjectAs, openProject } from '../fileOps';
+import { nanoid, niceScaleBar, UNIT_METERS, ptToPx } from '../utils';
+import type { ScaleBarObject, ImageObject } from '../types';
 
 const TOOLS: { id: Tool; icon: React.ReactNode; label: string; sep?: boolean }[] = [
   { id: 'select',   icon: <MousePointer2 size={14} />, label: 'Select (V)' },
@@ -22,12 +24,13 @@ const TOOLS: { id: Tool; icon: React.ReactNode; label: string; sep?: boolean }[]
 
 export default function Topbar() {
   const {
-    tool, setTool, zoom, setZoom,
+    tool, setTool, zoom, setZoom, fitView,
     doc, setDocMeta,
     past, future, undo, redo,
     toggleMetadataPanel, toggleLayersPanel,
     showRulers, toggleRulers,
     currentFilePath, setCurrentFilePath,
+    addObject, selectedId,
   } = useStore();
 
   const [editingTitle, setEditingTitle] = useState(false);
@@ -35,17 +38,33 @@ export default function Topbar() {
   const [showExport, setShowExport] = useState(false);
   const [showGrid, setShowGrid]   = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'error'>('idle');
+  const [saveError, setSaveError] = useState('');
 
   const desktop = isDesktop();
   const fileName = currentFilePath
     ? currentFilePath.split(/[\\/]/).pop()!
     : null;
 
+  const showSaved = () => {
+    setSaveStatus('saved');
+    setTimeout(() => setSaveStatus('idle'), 2200);
+  };
+
+  const showSaveError = (msg: string) => {
+    setSaveError(msg);
+    setSaveStatus('error');
+    setTimeout(() => setSaveStatus('idle'), 5000);
+  };
+
   const handleSave = async () => {
     setSaving(true);
+    setSaveStatus('idle');
     try {
       const path = await saveProject();
-      if (path) setCurrentFilePath(path);
+      if (path) { setCurrentFilePath(path); showSaved(); }
+    } catch (e) {
+      showSaveError((e as Error).message ?? String(e));
     } finally {
       setSaving(false);
     }
@@ -53,16 +72,53 @@ export default function Topbar() {
 
   const handleSaveAs = async () => {
     setSaving(true);
+    setSaveStatus('idle');
     try {
       const path = await saveProjectAs();
-      if (path) setCurrentFilePath(path);
+      if (path) { setCurrentFilePath(path); showSaved(); }
+    } catch (e) {
+      showSaveError((e as Error).message ?? String(e));
     } finally {
       setSaving(false);
     }
   };
 
   const handleOpen = async () => {
-    await openProject();
+    try {
+      await openProject();
+    } catch (e) {
+      showSaveError(`Open failed: ${(e as Error).message ?? String(e)}`);
+    }
+  };
+
+  // Auto-place a scale bar on the selected calibrated image (matches sidebar behavior).
+  // Returns true if placed, false if no calibrated image is selected.
+  const tryAutoPlaceScaleBar = (): boolean => {
+    const state = useStore.getState();
+    const imgObj = state.doc.objects.find(o => o.id === selectedId && o.type === 'image') as ImageObject | undefined;
+    if (!imgObj) return false;
+    const srcGrp = state.groups.find(g => g.id === imgObj.groupId);
+    const srcImg = srcGrp?.images.find(i => i.id === imgObj.imageId);
+    if (!srcImg?.calibration) return false;
+    const cal = srcImg.calibration;
+    const { realLength, unit, canvasPx } = niceScaleBar(srcImg.width, imgObj.width, cal);
+    const canvasUnitsPerPx  = cal.unitsPerPixel * (srcImg.width / imgObj.width);
+    const metersPerCanvasPx = canvasUnitsPerPx * (UNIT_METERS[cal.unit] ?? 1e-6);
+    const sb: ScaleBarObject = {
+      id: nanoid(), type: 'scalebar',
+      x: imgObj.x + imgObj.width - canvasPx - 10,
+      y: imgObj.y + 10,
+      width: canvasPx, height: 36,
+      rotation: 0, locked: false, visible: true,
+      label: `${realLength} ${unit}`,
+      length: canvasPx, realLength, unit,
+      color: '#000000', labelColor: '#000000', thickness: 4,
+      fontSize: ptToPx(8, state.doc.dpi),
+      metersPerCanvasPx,
+      parentImageId: imgObj.id,
+    };
+    addObject(sb);
+    return true;
   };
 
   const commitTitle = () => {
@@ -100,10 +156,18 @@ export default function Topbar() {
             {fileName && (
               <span
                 style={{ fontSize: 11, color: 'var(--text-muted)', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
-                title={`Saved: ${currentFilePath}\nCtrl+Shift+S to Save As…`}
+                title={`Saved: ${currentFilePath}\nClick to Save As…`}
                 onClick={handleSaveAs}
               >
                 {fileName}
+              </span>
+            )}
+            {saveStatus === 'saved' && (
+              <span style={{ fontSize: 11, color: '#4ade80', fontWeight: 500 }}>✓ Saved</span>
+            )}
+            {saveStatus === 'error' && (
+              <span style={{ fontSize: 11, color: 'var(--danger)', fontWeight: 500, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={saveError}>
+                ✗ {saveError}
               </span>
             )}
             <div className="sep" />
@@ -166,7 +230,14 @@ export default function Topbar() {
               <button
                 className={`btn-icon${tool === t.id ? ' active' : ''}`}
                 title={t.label}
-                onClick={() => setTool(t.id)}
+                onClick={() => {
+                  if (t.id === 'scalebar') {
+                    // If a calibrated image is selected, auto-place immediately (same as sidebar)
+                    if (!tryAutoPlaceScaleBar()) setTool('scalebar');
+                  } else {
+                    setTool(t.id);
+                  }
+                }}
               >
                 {t.icon}
               </button>
@@ -197,7 +268,7 @@ export default function Topbar() {
         <button className="btn-icon" onClick={() => setZoom(zoom + 0.1)} title="Zoom in (+)">
           <ZoomIn size={14} />
         </button>
-        <button className="btn-icon" onClick={() => setZoom(1)} title="Reset zoom (0)">
+        <button className="btn-icon" onClick={fitView} title="Fit to screen (0)">
           <Maximize2 size={13} />
         </button>
 
