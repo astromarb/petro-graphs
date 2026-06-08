@@ -507,6 +507,10 @@ export default function CanvasArea() {
     }
     fc.getObjects().forEach(fObj => {
       if (fObj === cropRectRef.current) return;
+      // Only user-owned objects (those with a storeId) can be selected; decorative
+      // objects (scalebar parts, mode tags, inset indicators) must stay non-interactive.
+      const owned = !!(fObj as fabric.FabricObject & { storeId?: string }).storeId;
+      if (!owned) return; // always leave selectable/evented as set at creation time
       fObj.selectable = tool === 'select';
     });
     fc.renderAll();
