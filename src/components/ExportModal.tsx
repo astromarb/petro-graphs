@@ -68,9 +68,8 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
       setProgress({ phase: 'Preparing canvas…', pct: 15 });
       await new Promise<void>(r => setTimeout(r, 16));
 
-      const multiplier = resOption <= 2 ? resOption : resOption / 96;
       // Reset viewport to identity so export always captures the full document
-      // regardless of current zoom/pan state, then restore in the outer finally.
+      // regardless of current zoom/pan state. Restore in the outer finally.
       fc.setViewportTransform([1, 0, 0, 1, 0, 0]);
       fc.setDimensions({ width: doc.width, height: doc.height });
       fc.renderAll();
@@ -80,11 +79,16 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
 
       let dataUrl: string;
       try {
-        dataUrl = fc.toDataURL({
-          format: format === 'pdf' ? 'jpeg' : format,
-          quality: format === 'pdf' ? 0.92 : quality,
-          multiplier,
-        });
+        // Offscreen canvas drawImage avoids Fabric's multiplier logic, which can
+        // produce incorrect output when zoom/pan state is non-trivial.
+        const srcCanvas = fc.getElement() as HTMLCanvasElement;
+        const dst = document.createElement('canvas');
+        dst.width  = outW;
+        dst.height = outH;
+        dst.getContext('2d')!.drawImage(srcCanvas, 0, 0, outW, outH);
+        const mimeType = format === 'pdf' ? 'image/jpeg' : `image/${format}`;
+        const q = format === 'pdf' ? 0.92 : (format === 'jpeg' ? quality : 1);
+        dataUrl = dst.toDataURL(mimeType, q);
       } catch (e) {
         throw new Error(`Canvas export failed (${(e as Error).message}). If you have LaTeX objects, try switching to plain text mode first.`);
       }

@@ -25,11 +25,11 @@ export default function App() {
 
   const [ready, setReady] = useState(false);
 
-  // Rehydrate from IndexedDB before first render
+  // Rehydrate from IndexedDB — show UI immediately, apply saved state in background
   useEffect(() => {
+    setReady(true);
     loadPersistedState().then(saved => {
       if (saved) rehydrate(saved);
-      setReady(true);
     });
   }, []);
 

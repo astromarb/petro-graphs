@@ -248,6 +248,10 @@ export default function CanvasArea() {
   // ── Connector lines: pairId → {line, indicator} ──────────────────────
   const connectorMapRef = useRef<Map<string, { line: fabric.Line; indicator: fabric.Rect }>>(new Map());
 
+  // ── Mode tag labels: storeId → { bg, tag } ───────────────────────────
+  const modeTagMapRef = useRef<Map<string, { bg: fabric.Rect; tag: fabric.Text }>>(new Map());
+
+
   // ── Refs to latest values (used in stable fabric event handlers) ──────
   const toolRef = useRef(tool);
   useEffect(() => { toolRef.current = tool; _activeTool = tool; }, [tool]);
@@ -890,6 +894,61 @@ export default function CanvasArea() {
     // Document background rect always stays below store objects
     if (docBgRef.current) fc.sendObjectToBack(docBgRef.current);
 
+    // ── Mode tag overlay (Rect+Text pairs — avoids Fabric backgroundColor crash) ──
+    const liveTagIds = new Set<string>();
+    doc.objects.forEach(obj => {
+      if (obj.type !== 'image') return;
+      const o = obj as ImageObject;
+      if (!o.showModeTag) {
+        const existing = modeTagMapRef.current.get(obj.id);
+        if (existing) {
+          fc.remove(existing.bg);
+          fc.remove(existing.tag);
+          modeTagMapRef.current.delete(obj.id);
+        }
+        return;
+      }
+      liveTagIds.add(obj.id);
+      const tagText = o.mode;
+      const pad  = 4;
+      const fSize = 11;
+      const tagW  = tagText.length * fSize * 0.65 + pad * 2;
+      const tagH  = fSize + pad * 2;
+      const tp = o.tagPosition ?? 'tl';
+      const tx = tp === 'tl' || tp === 'bl' ? o.x + pad : o.x + o.width  - tagW - pad;
+      const ty = tp === 'tl' || tp === 'tr' ? o.y + pad : o.y + o.height - tagH - pad;
+      const existing = modeTagMapRef.current.get(obj.id);
+      if (existing) {
+        existing.bg.set({ left: tx, top: ty, width: tagW, height: tagH });
+        existing.bg.setCoords();
+        existing.tag.set({ left: tx + pad, top: ty + pad, text: tagText });
+        existing.tag.setCoords();
+      } else {
+        const bg = new fabric.Rect({
+          left: tx, top: ty, width: tagW, height: tagH,
+          fill: 'rgba(0,0,0,0.55)',
+          selectable: false, evented: false,
+        });
+        const tag = new fabric.Text(tagText, {
+          left: tx + pad, top: ty + pad,
+          fontSize: fSize, fontWeight: 'bold',
+          fontFamily: 'Inter, system-ui, sans-serif',
+          fill: '#ffffff',
+          selectable: false, evented: false,
+        });
+        fc.add(bg);
+        fc.add(tag);
+        modeTagMapRef.current.set(obj.id, { bg, tag });
+      }
+    });
+    for (const [id, entry] of modeTagMapRef.current) {
+      if (!liveTagIds.has(id)) {
+        fc.remove(entry.bg);
+        fc.remove(entry.tag);
+        modeTagMapRef.current.delete(id);
+      }
+    }
+
     fc.renderAll();
   }, [doc.objects, groups, fabricReady]);
 
@@ -1263,6 +1322,7 @@ function createFabricObject(
 
     fabric.FabricImage.fromURL(img.dataUrl)
       .then((fImg) => {
+        if (!fc.getElement()) return; // canvas disposed
         const o = obj as ImageObject;
         fImg.set({ left: o.x, top: o.y, angle: o.rotation, opacity: o.opacity });
         const _nW = fImg.width  ?? 1;
@@ -1276,7 +1336,6 @@ function createFabricObject(
         fc.add(fImg);
         map.set(obj.id, fImg);
         // Re-enforce z-order: async add puts image at the top of the Fabric stack.
-        // Move it to its correct store index and keep docBg at absolute bottom.
         const storeIdx = useStore.getState().doc.objects.findIndex(o2 => o2.id === obj.id);
         if (storeIdx >= 0) {
           (fc as fabric.Canvas & { moveObjectTo(o: fabric.FabricObject, i: number): void })
@@ -1315,6 +1374,7 @@ function createFabricObject(
             latexGeneration.delete(obj.id);
             return;
           }
+          if (!fc.getElement()) return; // canvas was disposed
           const storeState = useStore.getState();
           const storeObj   = storeState.doc.objects.find(s => s.id === obj.id) as TextObject | undefined;
           const currentKey = storeObj
@@ -1328,8 +1388,8 @@ function createFabricObject(
           latexGeneration.delete(obj.id);
 
           const fImg = await cached.clone() as LatexFabricImage;
+          if (!fImg || typeof fImg.render !== 'function') return; // safety check
           // Scale by height so math renders at exactly fontSize pixels tall.
-          // The SVG was rendered at 2× pixel ratio so scale ≈ 0.5 at natural size.
           const imgH = fImg.height ?? 30;
           const scale = imgH > 0 ? (o.fontSize || 20) / imgH : 1;
           const renderedW = scale * (fImg.width ?? 0);
@@ -1356,6 +1416,7 @@ function createFabricObject(
         })
         .catch(() => {
           if (map.get(obj.id) !== sentinel) return;
+          if (!fc.getElement()) return;
           // Fallback: plain textbox showing stripped content
           latexGeneration.delete(obj.id);
           const stripped = o.content.replace(/\\[a-zA-Z]+\{([^}]*)\}/g, '$1').replace(/[\\{}]/g, '');
