@@ -54,6 +54,10 @@ jobs:
         with:
           targets: ${{ matrix.rust-targets }}
 
+      - name: Override Cargo target dir on Linux
+        if: matrix.platform == 'ubuntu-22.04'
+        run: echo "CARGO_TARGET_DIR=${{ github.workspace }}/src-tauri/target" >> "$GITHUB_ENV"
+
       - name: Add macOS universal targets (belt-and-suspenders)
         if: matrix.platform == 'macos-14'
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
