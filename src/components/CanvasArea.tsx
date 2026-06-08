@@ -109,7 +109,7 @@ function getScenePt(fc: fabric.Canvas, options: fabric.TEvent): fabric.Point | n
 // ── Ruler overlay ─────────────────────────────────────────────────────────
 
 function RulerOverlay({
-  orientation, size, zoom, dpi, docSize, offsetX = 0, offsetY = 0,
+  orientation, size, zoom, dpi, docSize, offsetX = 0, offsetY = 0, unit = 'mm',
 }: {
   orientation: 'horizontal' | 'vertical';
   size: number;
@@ -118,25 +118,48 @@ function RulerOverlay({
   docSize: number;
   offsetX?: number;
   offsetY?: number;
+  unit?: 'px' | 'mm' | 'in';
 }) {
   const isH = orientation === 'horizontal';
   const RULER_SIZE = 18;
+  const MIN_GAP = 48; // minimum screen-px between adjacent labels
 
-  // Figure out a nice tick spacing in document pixels
-  const pxPerInch = dpi * zoom;
-  const candidates = [10, 25, 50, 100, 200, 250, 500, 1000];
-  const minSpacingPx = 40; // minimum pixel gap between labels
-  const tickDocPx = candidates.find(c => c * zoom >= minSpacingPx) ?? 1000;
+  // Compute tick interval (in doc-pixels) and label formatter for the chosen unit
+  let tickDocPx: number;
+  let fmt: (docPx: number) => string;
 
-  const ticks: { pos: number; label: string }[] = [];
-  for (let docPx = 0; docPx <= docSize; docPx += tickDocPx) {
-    const pos = docPx * zoom;
-    const label = dpi >= 72 ? `${Math.round(docPx / (dpi / 72))}` : `${docPx}`;
-    void label;
-    ticks.push({ pos, label: `${docPx}` });
+  if (unit === 'mm') {
+    const pxPerMm = dpi / 25.4;
+    const mmSteps = [0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000];
+    const tickMm  = mmSteps.find(c => c * pxPerMm * zoom >= MIN_GAP) ?? 1000;
+    tickDocPx = tickMm * pxPerMm;
+    fmt = (px) => {
+      const mm = px / pxPerMm;
+      return mm === 0 ? '0' : mm >= 10 ? `${Math.round(mm)}` : `${parseFloat(mm.toFixed(1))}`;
+    };
+  } else if (unit === 'in') {
+    const pxPerIn  = dpi;
+    const inSteps  = [0.0625, 0.125, 0.25, 0.5, 1, 2, 5, 10, 20, 50];
+    const tickIn   = inSteps.find(c => c * pxPerIn * zoom >= MIN_GAP) ?? 50;
+    tickDocPx = tickIn * pxPerIn;
+    fmt = (px) => {
+      const v = px / pxPerIn;
+      if (v === 0) return '0"';
+      return Number.isInteger(v) ? `${v}"` : `${parseFloat(v.toFixed(2))}"`;
+    };
+  } else {
+    // px
+    const pxSteps = [10, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000];
+    tickDocPx = pxSteps.find(c => c * zoom >= MIN_GAP) ?? 5000;
+    fmt = (px) => `${px}`;
   }
 
-  void pxPerInch;
+  const ticks: { pos: number; label: string }[] = [];
+  for (let docPx = 0; docPx <= docSize + tickDocPx * 0.5; docPx += tickDocPx) {
+    const clamped = Math.min(docPx, docSize);
+    ticks.push({ pos: clamped * zoom, label: fmt(clamped) });
+    if (clamped >= docSize) break;
+  }
 
   const containerStyle: React.CSSProperties = isH
     ? { position: 'absolute', top: offsetY - RULER_SIZE, left: offsetX, width: size, height: RULER_SIZE, pointerEvents: 'none', zIndex: 10 }
@@ -145,8 +168,9 @@ function RulerOverlay({
   return (
     <div style={{
       ...containerStyle,
-      background: 'rgba(20,20,28,0.88)',
-      border: '1px solid rgba(255,255,255,0.08)',
+      background: 'rgba(13,11,8,0.92)',
+      borderRight:  isH ? 'none' : '1px solid rgba(201,168,76,0.18)',
+      borderBottom: isH ? '1px solid rgba(201,168,76,0.18)' : 'none',
       overflow: 'hidden',
     }}>
       {ticks.map(({ pos, label }) => (
@@ -155,12 +179,12 @@ function RulerOverlay({
           ...(isH
             ? { left: pos, top: 0, width: 1, height: RULER_SIZE }
             : { top: pos, left: 0, width: RULER_SIZE, height: 1 }),
-          background: 'rgba(255,255,255,0.25)',
+          background: 'rgba(201,168,76,0.35)',
         }}>
           <span style={{
             position: 'absolute',
             fontSize: 8,
-            color: 'rgba(255,255,255,0.5)',
+            color: 'rgba(201,168,76,0.75)',
             userSelect: 'none',
             ...(isH
               ? { left: 2, top: 2, whiteSpace: 'nowrap' }
@@ -187,7 +211,7 @@ export default function CanvasArea() {
     tool, setTool, zoom, setZoom, setPan, fitViewRequest,
     insets, addInset,
     addImageToGroup,
-    selectedId, showRulers,
+    selectedId, showRulers, rulerUnit,
     bringToFront, sendToBack, bringForward, sendBackward,
     duplicateObject, removeObject, updateObject,
   } = useStore();
@@ -522,13 +546,19 @@ export default function CanvasArea() {
     if (prev.w === doc.width && prev.h === doc.height) return;
     prevDocSizeRef.current = { w: doc.width, h: doc.height };
     const wrap = wrapRef.current;
+    const fc = fabricRef.current;
     if (!wrap) return;
-    const padded = 0.92; // leave 8% margin
-    const fitZoom = Math.min(
+    const padded = 0.92;
+    const fitZoom = Math.max(0.05, Math.min(4, Math.min(
       (wrap.clientWidth  * padded) / doc.width,
       (wrap.clientHeight * padded) / doc.height,
-    );
-    setZoom(Math.max(0.05, Math.min(4, fitZoom)));
+    )));
+    const tx = (wrap.clientWidth  - doc.width  * fitZoom) / 2;
+    const ty = (wrap.clientHeight - doc.height * fitZoom) / 2;
+    if (fc) { fc.setViewportTransform([fitZoom, 0, 0, fitZoom, tx, ty]); fc.renderAll(); }
+    setDocOffset({ x: tx, y: ty });
+    viewportInitRef.current = true; // prevent zoom effect from re-applying over this
+    setZoom(fitZoom);
   }, [doc.width, doc.height, setZoom]);
 
   // ── Fit-to-screen: re-centers and computes fit-zoom (triggered by store signal) ──
@@ -761,9 +791,12 @@ export default function CanvasArea() {
       const my = e.clientY - rect.top;
       const vpt = fc.viewportTransform ?? [1, 0, 0, 1, 0, 0];
       const ratio = newZoom / vpt[0];
-      fc.setViewportTransform([newZoom, 0, 0, newZoom, mx + (vpt[4] - mx) * ratio, my + (vpt[5] - my) * ratio]);
+      const newTx = mx + (vpt[4] - mx) * ratio;
+      const newTy = my + (vpt[5] - my) * ratio;
+      fc.setViewportTransform([newZoom, 0, 0, newZoom, newTx, newTy]);
       fc.renderAll();
       setZoom(newZoom);
+      setDocOffset({ x: newTx, y: newTy }); // keep rulers locked to document edge
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
@@ -1144,11 +1177,22 @@ export default function CanvasArea() {
           </div>
         )}
 
-        {/* Rulers — positioned at document boundary using docOffset */}
+        {/* Rulers — track docOffset so they stay flush with the document edge */}
         {showRulers && (
           <>
-            <RulerOverlay orientation="horizontal" size={Math.round(doc.width * zoom)} zoom={zoom} dpi={doc.dpi} docSize={doc.width} offsetX={docOffset.x} offsetY={docOffset.y} />
-            <RulerOverlay orientation="vertical"   size={Math.round(doc.height * zoom)} zoom={zoom} dpi={doc.dpi} docSize={doc.height} offsetX={docOffset.x} offsetY={docOffset.y} />
+            <RulerOverlay orientation="horizontal" size={Math.round(doc.width  * zoom)} zoom={zoom} dpi={doc.dpi} docSize={doc.width}  offsetX={docOffset.x} offsetY={docOffset.y} unit={rulerUnit} />
+            <RulerOverlay orientation="vertical"   size={Math.round(doc.height * zoom)} zoom={zoom} dpi={doc.dpi} docSize={doc.height} offsetX={docOffset.x} offsetY={docOffset.y} unit={rulerUnit} />
+            {/* Corner square at ruler intersection */}
+            <div style={{
+              position: 'absolute',
+              top:  docOffset.y - 18,
+              left: docOffset.x - 18,
+              width: 18, height: 18,
+              background: 'rgba(13,11,8,0.92)',
+              borderRight:  '1px solid rgba(201,168,76,0.18)',
+              borderBottom: '1px solid rgba(201,168,76,0.18)',
+              zIndex: 11, pointerEvents: 'none',
+            }} />
           </>
         )}
 

@@ -118,6 +118,8 @@ export interface AppState {
   toggleLayersPanel:    () => void;
   showRulers:           boolean;
   toggleRulers:         () => void;
+  rulerUnit:            'px' | 'mm' | 'in';
+  setRulerUnit:         (u: 'px' | 'mm' | 'in') => void;
 
   // Native file path (desktop only)
   currentFilePath: string | null;
@@ -426,6 +428,8 @@ export const useStore = create<AppState>()(
     toggleLayersPanel: () => set((s) => { s.showLayersPanel = !s.showLayersPanel; }),
     showRulers: false,
     toggleRulers: () => set((s) => { s.showRulers = !s.showRulers; }),
+    rulerUnit: 'mm',
+    setRulerUnit: (u) => set((s) => { s.rulerUnit = u; }),
 
     currentFilePath: null,
     setCurrentFilePath: (path) => set((s) => { s.currentFilePath = path; }),

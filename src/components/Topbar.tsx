@@ -28,7 +28,7 @@ export default function Topbar() {
     doc, setDocMeta,
     past, future, undo, redo,
     toggleMetadataPanel, toggleLayersPanel,
-    showRulers, toggleRulers,
+    showRulers, toggleRulers, rulerUnit, setRulerUnit,
     currentFilePath, setCurrentFilePath,
     addObject, selectedId,
   } = useStore();
@@ -282,6 +282,20 @@ export default function Topbar() {
         >
           <Ruler size={14} />
         </button>
+        {showRulers && (
+          <button
+            className="btn-icon"
+            title="Cycle ruler units: mm → in → px"
+            onClick={() => setRulerUnit(rulerUnit === 'mm' ? 'in' : rulerUnit === 'in' ? 'px' : 'mm')}
+            style={{
+              fontSize: 9, fontWeight: 700, letterSpacing: 0.5,
+              minWidth: 26, padding: '2px 5px',
+              color: 'var(--accent)', opacity: 1,
+            }}
+          >
+            {rulerUnit}
+          </button>
+        )}
         <button className="btn-icon" title="Layers" onClick={toggleLayersPanel}>
           <Layers size={14} />
         </button>
