@@ -285,8 +285,8 @@ export default function Topbar() {
         {showRulers && (
           <button
             className="btn-icon"
-            title="Cycle ruler units: mm → in → px"
-            onClick={() => setRulerUnit(rulerUnit === 'mm' ? 'in' : rulerUnit === 'in' ? 'px' : 'mm')}
+            title="Cycle ruler units: in → cm → mm"
+            onClick={() => setRulerUnit(rulerUnit === 'in' ? 'cm' : rulerUnit === 'cm' ? 'mm' : 'in')}
             style={{
               fontSize: 9, fontWeight: 700, letterSpacing: 0.5,
               minWidth: 26, padding: '2px 5px',

@@ -103,20 +103,22 @@ function RulerOverlay({
   zoom: number;
   dpi: number;
   docSize: number;
-  rulerUnit: 'in' | 'cm';
+  rulerUnit: 'in' | 'cm' | 'mm';
 }) {
   const isH = orientation === 'horizontal';
   const RULER_SIZE = 18;
 
   // Determine tick spacing in real-world units
-  // pxPerUnit = how many doc-pixels per 1 real unit (inch or cm)
+  // pxPerUnit = how many doc-pixels per 1 real unit (inch, cm, or mm)
   const pxPerIn = dpi;
-  const pxPerUnit = rulerUnit === 'in' ? pxPerIn : pxPerIn / 2.54;
+  const pxPerUnit = rulerUnit === 'in' ? pxPerIn : rulerUnit === 'cm' ? pxPerIn / 2.54 : pxPerIn / 25.4;
 
   // Nice tick intervals in real units
   const unitCandidates = rulerUnit === 'in'
     ? [1/16, 1/8, 1/4, 1/2, 1, 2, 3, 6, 12]
-    : [0.1, 0.25, 0.5, 1, 2, 5, 10, 25, 50];
+    : rulerUnit === 'cm'
+    ? [0.1, 0.25, 0.5, 1, 2, 5, 10, 25, 50]
+    : [0.5, 1, 2, 5, 10, 25, 50, 100];
   const minSpacingPx = 40;
   const tickUnit = unitCandidates.find(c => c * pxPerUnit * zoom >= minSpacingPx) ?? unitCandidates[unitCandidates.length - 1];
   const tickDocPx = tickUnit * pxPerUnit;
@@ -920,7 +922,7 @@ export default function CanvasArea() {
     <div
       ref={wrapRef}
       className="canvas-area canvas-checkerboard"
-      style={{ overflow: 'hidden', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      style={{ overflow: 'hidden', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
       onDrop={onDrop}
       onDragOver={e => { e.preventDefault(); setDropHighlight(true); }}
       onDragLeave={() => setDropHighlight(false)}

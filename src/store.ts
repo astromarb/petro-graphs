@@ -163,7 +163,8 @@ export interface AppState {
   toggleLayersPanel:    () => void;
   showRulers:           boolean;
   toggleRulers:         () => void;
-  rulerUnit:            'in' | 'cm';
+  rulerUnit:            'in' | 'cm' | 'mm';
+  setRulerUnit:         (unit: 'in' | 'cm' | 'mm') => void;
   toggleRulerUnit:      () => void;
 
   /** Restore state from IndexedDB on app startup */
@@ -384,8 +385,11 @@ export const useStore = create<AppState>()(
     toggleLayersPanel: () => set((s) => { s.showLayersPanel = !s.showLayersPanel; }),
     showRulers: false,
     toggleRulers: () => set((s) => { s.showRulers = !s.showRulers; }),
-    rulerUnit: 'in' as 'in' | 'cm',
-    toggleRulerUnit: () => set((s) => { s.rulerUnit = s.rulerUnit === 'in' ? 'cm' : 'in'; }),
+    rulerUnit: 'mm' as 'in' | 'cm' | 'mm',
+    setRulerUnit: (unit) => set((s) => { s.rulerUnit = unit; }),
+    toggleRulerUnit: () => set((s) => {
+      s.rulerUnit = s.rulerUnit === 'in' ? 'cm' : s.rulerUnit === 'cm' ? 'mm' : 'in';
+    }),
 
     savedVersion: 0,
     markSaved: () => set((s) => { s.savedVersion = s.past.length; }),
