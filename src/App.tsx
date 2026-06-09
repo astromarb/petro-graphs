@@ -7,6 +7,7 @@ import RightSidebar from './components/RightSidebar';
 import MetadataModal from './components/MetadataModal';
 import LayersPanel from './components/LayersPanel';
 import CalibrationModal from './components/CalibrationModal';
+import UpdateNotifier from './components/UpdateNotifier';
 import { useStore, loadPersistedState, saveProjectFile, openProjectFile } from './store';
 import { isDesktop, saveProject, saveProjectAs, openProject } from './fileOps';
 import type { Tool } from './types';
@@ -128,6 +129,7 @@ export default function App() {
       <MetadataModal />
       <LayersPanel />
       <CalibrationModal />
+      <UpdateNotifier />
     </div>
   );
 }

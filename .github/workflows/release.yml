@@ -92,6 +92,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MACOSX_DEPLOYMENT_TARGET: '11.0'
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Petro Graphs ${{ github.ref_name }}'
@@ -117,4 +119,5 @@ jobs:
             > Built with Tauri v2, Rust, React 19, and Fabric.js 7.
           releaseDraft: true
           prerelease: false
+          updaterJsonKeepUniversal: true
           args: ${{ matrix.args }}
