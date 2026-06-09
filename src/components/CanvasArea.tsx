@@ -260,11 +260,30 @@ export default function CanvasArea() {
   // ── Initialize Fabric canvas (once) ──────────────────────────────────
   useEffect(() => {
     if (!canvasElRef.current) return;
+    // Guard against React StrictMode double-invocation: if a canvas already
+    // exists on this element (Fabric wraps it and sets data-fabric), skip re-init.
+    if (fabricRef.current) return;
 
     const fc = new fabric.Canvas(canvasElRef.current, {
       selection: true,
       preserveObjectStacking: true,
     });
+
+    // Size canvas to fit the viewport immediately so we never flash at zoom=1
+    const wrap = wrapRef.current;
+    if (wrap) {
+      const padded = 0.92;
+      const { doc: d } = useStore.getState();
+      const fitZoom = Math.min(
+        (wrap.clientWidth  * padded) / d.width,
+        (wrap.clientHeight * padded) / d.height,
+      );
+      const z = Math.max(0.05, Math.min(4, fitZoom));
+      fc.setDimensions({ width: Math.round(d.width * z), height: Math.round(d.height * z) });
+      fc.setZoom(z);
+      useStore.getState().setZoom(z);
+    }
+
     fabricRef.current = fc;
     sharedFabricRef.current = fc;
     setFabricReady(true);
