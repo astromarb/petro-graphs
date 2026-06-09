@@ -5,6 +5,8 @@ import {
   ChevronDown, ChevronRight,
   AlignLeft, AlignCenter, AlignRight,
   FlipHorizontal, FlipVertical,
+  AlignStartVertical, AlignCenterVertical, AlignEndVertical,
+  AlignStartHorizontal, AlignCenterHorizontal, AlignEndHorizontal,
 } from 'lucide-react';
 import { useStore } from '../store';
 import type {
@@ -548,6 +550,45 @@ function ScaleBarPanel({ obj, update, dpi }: { obj: ScaleBarObject; update: (p: 
 }
 
 // ── Transform panel ───────────────────────────────────────────────────────
+// 3×3 alignment grid against the canvas bounds
+function AlignPanel({ obj, canvasW, canvasH, update }: {
+  obj: CanvasObject;
+  canvasW: number;
+  canvasH: number;
+  update: (p: Partial<CanvasObject>) => void;
+}) {
+  const w = obj.width;
+  const h = obj.height;
+  const positions: { title: string; icon: React.ReactNode; x: number; y: number }[] = [
+    { title: 'Top-left',      icon: <AlignStartVertical size={11} />,    x: 0,              y: 0 },
+    { title: 'Top-center',    icon: <AlignCenterVertical size={11} />,   x: (canvasW-w)/2,  y: 0 },
+    { title: 'Top-right',     icon: <AlignEndVertical size={11} />,      x: canvasW-w,      y: 0 },
+    { title: 'Middle-left',   icon: <AlignStartHorizontal size={11} />,  x: 0,              y: (canvasH-h)/2 },
+    { title: 'Center',        icon: <AlignCenterHorizontal size={11} />, x: (canvasW-w)/2,  y: (canvasH-h)/2 },
+    { title: 'Middle-right',  icon: <AlignEndHorizontal size={11} />,    x: canvasW-w,      y: (canvasH-h)/2 },
+    { title: 'Bottom-left',   icon: <AlignLeft size={11} />,             x: 0,              y: canvasH-h },
+    { title: 'Bottom-center', icon: <AlignCenter size={11} />,           x: (canvasW-w)/2,  y: canvasH-h },
+    { title: 'Bottom-right',  icon: <AlignRight size={11} />,            x: canvasW-w,      y: canvasH-h },
+  ];
+  return (
+    <Section title="Align to Canvas" defaultOpen={false}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 4 }}>
+        {positions.map(p => (
+          <button
+            key={p.title}
+            className="btn btn-ghost"
+            title={p.title}
+            onClick={() => update({ x: Math.round(p.x), y: Math.round(p.y) })}
+            style={{ padding: '5px 0', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          >
+            {p.icon}
+          </button>
+        ))}
+      </div>
+    </Section>
+  );
+}
+
 function TransformPanel({ obj, update }: { obj: CanvasObject; update: (p: Partial<CanvasObject>) => void }) {
   return (
     <Section title="Transform" defaultOpen={false}>
@@ -625,6 +666,7 @@ export default function RightSidebar() {
         </div>
 
         <div className="panel-section">
+          <AlignPanel obj={obj} canvasW={doc.width} canvasH={doc.height} update={update} />
           <TransformPanel obj={obj} update={update} />
         </div>
       </div>

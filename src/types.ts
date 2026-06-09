@@ -75,6 +75,8 @@ export interface ImageObject extends CanvasObjectBase {
   border: BorderStyle;
   opacity: number;
   adjustments: ImageAdjustments;
+  showModeTag?: boolean;
+  tagPosition?: 'tl' | 'tr' | 'bl' | 'br';
 }
 
 export type TextStyle = 'h1' | 'h2' | 'h3' | 'body' | 'caption' | 'custom';

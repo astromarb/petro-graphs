@@ -46,8 +46,8 @@ async function idbLoad(): Promise<PersistedState | null> {
   const v1 = await get<{ doc: CanvasDoc; groups: ImageGroup[]; insets: InsetPair[] }>(IDB_KEY_V1);
   if (v1) {
     return {
-      pages: [{ doc: v1.doc, insets: v1.insets ?? [] }],
-      activePageId: v1.doc.id,
+      doc: v1.doc,
+      insets: v1.insets ?? [],
       groups: v1.groups,
     };
   }

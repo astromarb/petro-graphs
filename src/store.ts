@@ -124,6 +124,7 @@ export interface AppState {
 
   // Canvas objects
   addObject:       (obj: CanvasObject) => void;
+  addObjects:      (objs: CanvasObject[]) => void;
   updateObject:    (id: string, patch: Partial<CanvasObject>) => void;
   removeObject:    (id: string) => void;
   reorderObjects:  (ids: string[]) => void;
@@ -155,6 +156,8 @@ export interface AppState {
   panX:   number;
   panY:   number;
   setPan: (x: number, y: number) => void;
+  fitView: () => void;
+  fitViewRequest: number;
 
   // UI
   showMetadataPanel:    boolean;
@@ -286,6 +289,12 @@ export const useStore = create<AppState>()(
       s.doc.objects.push(obj);
       persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
+    addObjects: (objs) => set((s) => {
+      if (objs.length === 0) return;
+      pushHistory(s);
+      for (const obj of objs) s.doc.objects.push(obj);
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
+    }),
     updateObject: (id, patch) => set((s) => {
       const structural = ['x','y','width','height','rotation'].some(k => k in patch);
       if (structural) pushHistory(s);
@@ -371,13 +380,15 @@ export const useStore = create<AppState>()(
     selectedId: null,
     setSelectedId: (id) => set((s) => { s.selectedId = id; }),
 
-    tool: 'select',
+    tool: 'select' as Tool,
     setTool: (t) => set((s) => { s.tool = t; }),
 
     zoom: 1,
     setZoom: (z) => set((s) => { s.zoom = Math.max(0.1, Math.min(4, z)); }),
     panX: 0, panY: 0,
     setPan: (x, y) => set((s) => { s.panX = x; s.panY = y; }),
+    fitViewRequest: 0,
+    fitView: () => set((s) => { s.fitViewRequest = s.fitViewRequest + 1; }),
 
     showMetadataPanel: false,
     toggleMetadataPanel: () => set((s) => { s.showMetadataPanel = !s.showMetadataPanel; }),
@@ -393,13 +404,13 @@ export const useStore = create<AppState>()(
 
     savedVersion: 0,
     markSaved: () => set((s) => { s.savedVersion = s.past.length; }),
-    hasUnsavedChanges: () => {
-      const s = useStore.getState();
+    hasUnsavedChanges: (): boolean => {
+      const s = useStore.getState() as AppState;
       return s.past.length !== s.savedVersion || s.doc.objects.length > 0 || s.groups.length > 0;
     },
 
     currentFilePath: null,
-    setCurrentFilePath: (path) => set((s) => { s.currentFilePath = path; }),
+    setCurrentFilePath: (path: string | null) => set((s) => { s.currentFilePath = path; }),
 
     flipOrientation: () => set((s) => {
       const oldW = s.doc.width;
