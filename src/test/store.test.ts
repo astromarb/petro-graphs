@@ -391,4 +391,27 @@ describe('project persistence helpers', () => {
     expect(useStore.getState().doc.objects).toHaveLength(1);
     expect(useStore.getState().doc.objects[0].id).toBe(obj.id);
   });
+
+  it('rehydrate with saved doc missing objects field leaves objects as []', () => {
+    // Older .petrofig files may not include doc.objects — Object.assign would
+    // overwrite the field with undefined, causing .map() crashes in CanvasArea.
+    const { rehydrate } = useStore.getState();
+    const docWithoutObjects = { ...useStore.getState().doc } as Record<string, unknown>;
+    delete docWithoutObjects['objects'];
+    rehydrate({ doc: docWithoutObjects as never, insets: [], groups: [] });
+    expect(Array.isArray(useStore.getState().doc.objects)).toBe(true);
+    expect(useStore.getState().doc.objects).toHaveLength(0);
+  });
+
+  it('rehydrate with undefined groups leaves groups as []', () => {
+    const { rehydrate } = useStore.getState();
+    rehydrate({ doc: useStore.getState().doc, insets: [], groups: undefined as never });
+    expect(Array.isArray(useStore.getState().groups)).toBe(true);
+  });
+
+  it('rehydrate with undefined insets leaves insets as []', () => {
+    const { rehydrate } = useStore.getState();
+    rehydrate({ doc: useStore.getState().doc, insets: undefined as never, groups: [] });
+    expect(Array.isArray(useStore.getState().insets)).toBe(true);
+  });
 });

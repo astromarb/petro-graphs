@@ -328,3 +328,32 @@ describe('LeftSidebar', () => {
     expect(screen.getByText(/drop or click to upload/i)).toBeInTheDocument();
   });
 });
+
+// ── PageTabs ──────────────────────────────────────────────────────────────────
+// These tests guard against the component crashing due to accessing undefined
+// store fields (pages/activePageId/etc. that may not exist) or the store
+// returning undefined for array fields after rehydration.
+
+describe('PageTabs', () => {
+  beforeEach(resetStore);
+
+  it('renders without crashing when store is in its default state', async () => {
+    const { default: PageTabs } = await import('../components/PageTabs');
+    expect(() => render(<PageTabs />)).not.toThrow();
+  });
+
+  it('displays the current doc title', async () => {
+    const { default: PageTabs } = await import('../components/PageTabs');
+    useStore.setState({ doc: { ...useStore.getState().doc, title: 'My Figure' } });
+    render(<PageTabs />);
+    expect(screen.getByText('My Figure')).toBeInTheDocument();
+  });
+
+  it('does not crash after rehydrate with a partial saved doc', async () => {
+    const { default: PageTabs } = await import('../components/PageTabs');
+    const partialDoc = { ...useStore.getState().doc } as Record<string, unknown>;
+    delete partialDoc['objects'];
+    useStore.getState().rehydrate({ doc: partialDoc as never, insets: undefined as never, groups: undefined as never });
+    expect(() => render(<PageTabs />)).not.toThrow();
+  });
+});
