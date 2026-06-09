@@ -3,7 +3,7 @@ import * as fabric from 'fabric';
 import { useStore } from '../store';
 import type {
   CanvasObject, ImageObject, TextObject, ShapeObject, ScaleBarObject,
-  BorderStyle, InsetPair, ThinSectionImage, ImageAdjustments, ScaleUnit,
+  BorderStyle, InsetPair, ThinSectionImage, ImageAdjustments, ScaleUnit, PendingGrid,
 } from '../types';
 import { DEFAULT_ADJUSTMENTS } from '../types';
 import { nanoid, niceScaleBar, UNIT_METERS } from '../utils';
@@ -96,7 +96,7 @@ function getScenePt(fc: fabric.Canvas, options: fabric.TEvent): fabric.Point | n
 // ── Ruler overlay ─────────────────────────────────────────────────────────
 
 function RulerOverlay({
-  orientation, size, zoom, dpi, docSize, rulerUnit,
+  orientation, size, zoom, dpi, docSize, rulerUnit, left, top,
 }: {
   orientation: 'horizontal' | 'vertical';
   size: number;
@@ -104,6 +104,8 @@ function RulerOverlay({
   dpi: number;
   docSize: number;
   rulerUnit: 'in' | 'cm' | 'mm';
+  left?: number;
+  top?: number;
 }) {
   const isH = orientation === 'horizontal';
   const RULER_SIZE = 18;
@@ -134,8 +136,8 @@ function RulerOverlay({
   void tickDocPx;
 
   const containerStyle: React.CSSProperties = isH
-    ? { position: 'absolute', top: -RULER_SIZE, left: 0, width: size, height: RULER_SIZE, pointerEvents: 'none', zIndex: 10 }
-    : { position: 'absolute', top: 0, left: -RULER_SIZE, width: RULER_SIZE, height: size, pointerEvents: 'none', zIndex: 10 };
+    ? { position: 'absolute', top: (top ?? 0) - RULER_SIZE, left: left ?? 0, width: size, height: RULER_SIZE, pointerEvents: 'none', zIndex: 10 }
+    : { position: 'absolute', top: top ?? 0, left: (left ?? 0) - RULER_SIZE, width: RULER_SIZE, height: size, pointerEvents: 'none', zIndex: 10 };
 
   return (
     <div style={{
@@ -170,6 +172,12 @@ function RulerOverlay({
 }
 
 
+// Extra canvas pixels on every side beyond the document boundary.
+// Objects placed outside the document are rendered here rather than being
+// silently clipped at the doc edge — they appear on top of the checkered
+// background instead of disappearing.
+const OVERFLOW_PAD = 600;
+
 // ── Component ─────────────────────────────────────────────────────────────
 
 export default function CanvasArea() {
@@ -178,12 +186,13 @@ export default function CanvasArea() {
   const wrapRef     = useRef<HTMLDivElement>(null);
 
   const {
-    doc, groups, addObject, setSelectedId,
+    doc, groups, addObject, addObjects, setSelectedId,
     tool, setTool, zoom, setZoom, setPan,
     insets, addInset,
     addImageToGroup,
     selectedId, showRulers, rulerUnit, toggleRulerUnit,
     fitViewRequest,
+    pendingGrid, setPendingGrid,
   } = useStore();
 
   // Compute whether the currently selected object is a calibrated image
@@ -198,6 +207,9 @@ export default function CanvasArea() {
   // ── Object map: storeId → fabric object ──────────────────────────────
   const objMapRef = useRef<Map<string, fabric.FabricObject>>(new Map());
 
+  // ── Document background rect (the white page within the larger canvas) ──
+  const docBgRef = useRef<fabric.Rect | null>(null);
+
   // ── Panning ───────────────────────────────────────────────────────────
   const isPanning = useRef(false);
   const lastPan   = useRef({ x: 0, y: 0 });
@@ -210,6 +222,12 @@ export default function CanvasArea() {
   const [insetSourceId, setInsetSourceId] = useState<string | null>(null);
   const cropRectRef = useRef<fabric.Rect | null>(null);
 
+  // ── Grid-place draw state ─────────────────────────────────────────────
+  const gridRectPreviewRef = useRef<fabric.Rect | null>(null);
+  const gridDrawRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  const pendingGridRef = useRef<PendingGrid | null>(null);
+  useEffect(() => { pendingGridRef.current = pendingGrid; }, [pendingGrid]);
+
   // ── Scalebar draw state ───────────────────────────────────────────────
   const [scalebarPhase, setScalebarPhase] = useState<'idle' | 'drawing'>('idle');
   const scalebarPreviewRef = useRef<fabric.Line | null>(null);
@@ -219,8 +237,7 @@ export default function CanvasArea() {
   // ── Connector lines: pairId → {line, indicator} ──────────────────────
   const connectorMapRef = useRef<Map<string, { line: fabric.Line; indicator: fabric.Rect }>>(new Map());
 
-  // ── Mode tag labels: storeId → { bg, tag } ───────────────────────────
-  const modeTagMapRef = useRef<Map<string, { bg: fabric.Rect; tag: fabric.Text }>>(new Map());
+  // (mode tag labels removed — PPL/XPL overlays are no longer rendered)
 
   // ── Refs to latest values (used in stable fabric event handlers) ──────
   const toolRef = useRef(tool);
@@ -267,6 +284,21 @@ export default function CanvasArea() {
     });
     fabricRef.current = fc;
     sharedFabricRef.current = fc;
+
+    // Document background rect — the white page within the larger canvas.
+    // Canvas background is transparent so the CSS checkerboard shows through
+    // in the OVERFLOW_PAD margin; only this rect is "white".
+    const bgRect = new fabric.Rect({
+      left: 0, top: 0,
+      width: useStore.getState().doc.width,
+      height: useStore.getState().doc.height,
+      fill: useStore.getState().doc.background,
+      selectable: false, evented: false,
+    });
+    fc.add(bgRect);
+    docBgRef.current = bgRect;
+    // fc.backgroundColor stays '' (transparent)
+
     setFabricReady(true);
 
     fc.on('selection:created', () => {
@@ -298,22 +330,6 @@ export default function CanvasArea() {
     fc.on('object:moving', (e) => {
       const fObj = e.target as fabric.FabricObject & { storeId?: string };
       if (!fObj?.storeId) return;
-
-      // ── Mode tag live update ──────────────────────────────────────────
-      const entry = modeTagMapRef.current.get(fObj.storeId);
-      if (entry) {
-        const pad = 4, fSize = 11;
-        const tagText = entry.tag.text ?? '';
-        const tagW = tagText.length * fSize * 0.65 + pad * 2;
-        const tagH = fSize + pad * 2;
-        const tx = (fObj.left ?? 0) + pad;
-        const ty = (fObj.top  ?? 0) + pad;
-        void tagH;
-        entry.bg.set({ left: tx, top: ty, width: tagW });
-        entry.bg.setCoords();
-        entry.tag.set({ left: tx + pad, top: ty + pad });
-        entry.tag.setCoords();
-      }
 
       // ── Smart guides ─────────────────────────────────────────────────
       const { doc: sd } = useStore.getState();
@@ -379,6 +395,26 @@ export default function CanvasArea() {
       setGuidesRef.current(activeGuides);
     });
 
+    // ── mouse:down — start grid-place rect draw ───────────────────────
+    fc.on('mouse:down', (options) => {
+      if (toolRef.current === 'grid-place') {
+        const pt = getScenePt(fc, options);
+        if (!pt) return;
+        gridDrawRef.current = { x1: pt.x, y1: pt.y, x2: pt.x, y2: pt.y };
+        const preview = new fabric.Rect({
+          left: pt.x, top: pt.y, width: 0, height: 0,
+          fill: 'rgba(170,59,255,0.12)',
+          stroke: '#aa3bff', strokeWidth: 2,
+          strokeDashArray: [6, 4],
+          selectable: false, evented: false,
+        });
+        gridRectPreviewRef.current = preview;
+        fc.add(preview);
+        fc.renderAll();
+        return;
+      }
+    });
+
     // ── mouse:down — start scalebar draw (requires calibrated image) ─────
     fc.on('mouse:down', (options) => {
       if (toolRef.current !== 'scalebar') return;
@@ -410,6 +446,23 @@ export default function CanvasArea() {
       setScalebarPhase('drawing');
     });
 
+    // ── mouse:move — update grid-place rect preview ───────────────────
+    fc.on('mouse:move', (options) => {
+      if (toolRef.current === 'grid-place' && gridDrawRef.current && gridRectPreviewRef.current) {
+        const pt = getScenePt(fc, options);
+        if (!pt) return;
+        const d = gridDrawRef.current;
+        d.x2 = pt.x; d.y2 = pt.y;
+        const left   = Math.min(d.x1, d.x2);
+        const top    = Math.min(d.y1, d.y2);
+        const width  = Math.abs(d.x2 - d.x1);
+        const height = Math.abs(d.y2 - d.y1);
+        gridRectPreviewRef.current.set({ left, top, width, height });
+        fc.renderAll();
+        return;
+      }
+    });
+
     // ── mouse:move — update scalebar preview line ─────────────────────
     fc.on('mouse:move', (options) => {
       if (toolRef.current !== 'scalebar') return;
@@ -420,6 +473,66 @@ export default function CanvasArea() {
       scalebarDrawRef.current.x2 = pt.x;
       scalebarDrawRef.current.y2 = pt.y;
       fc.renderAll();
+    });
+
+    // ── mouse:up — finish grid-place rect draw ────────────────────────
+    fc.on('mouse:up', () => {
+      if (toolRef.current !== 'grid-place') return;
+      const d   = gridDrawRef.current;
+      const pg  = pendingGridRef.current;
+      // Remove preview rect
+      if (gridRectPreviewRef.current) {
+        fc.remove(gridRectPreviewRef.current);
+        gridRectPreviewRef.current = null;
+        fc.renderAll();
+      }
+      gridDrawRef.current = null;
+      if (!d || !pg) { setToolRef.current('select'); return; }
+
+      const areaW = Math.abs(d.x2 - d.x1);
+      const areaH = Math.abs(d.y2 - d.y1);
+      if (areaW < 20 || areaH < 20) { setToolRef.current('select'); return; }
+
+      const { groups: sg } = useStore.getState();
+      const grp = sg.find(g => g.id === pg.groupId);
+      if (!grp) { setToolRef.current('select'); return; }
+
+      const imgs = pg.imageIds
+        .map(id => grp.images.find(i => i.id === id))
+        .filter(Boolean) as typeof grp.images;
+
+      if (imgs.length === 0) { setToolRef.current('select'); return; }
+
+      const cols  = pg.cols;
+      const rows  = Math.ceil(imgs.length / cols);
+      const gap   = pg.gap;
+      const cellW = Math.floor((areaW - gap * (cols - 1)) / cols);
+      const cellH = Math.floor((areaH - gap * (rows - 1)) / rows);
+      const originX = Math.min(d.x1, d.x2);
+      const originY = Math.min(d.y1, d.y2);
+
+      if (cellW < 10 || cellH < 10) { setToolRef.current('select'); return; }
+
+      const objs: CanvasObject[] = imgs.map((img, idx) => ({
+        id: nanoid(),
+        type: 'image' as const,
+        imageId: img.id,
+        groupId: grp.id,
+        mode: img.mode,
+        x: Math.round(originX + (idx % cols) * (cellW + gap)),
+        y: Math.round(originY + Math.floor(idx / cols) * (cellH + gap)),
+        width:  cellW,
+        height: cellH,
+        rotation: 0, locked: false, visible: true,
+        label: img.name,
+        border: { color: '#ffffff', width: 2, style: 'solid' as const, radius: 0 },
+        opacity: 1,
+        adjustments: { ...DEFAULT_ADJUSTMENTS },
+      } as ImageObject));
+
+      useStore.getState().addObjects(objs);
+      useStore.getState().setPendingGrid(null);
+      setToolRef.current('select');
     });
 
     // ── mouse:up — place text/shape, finish scalebar, start inset ────
@@ -462,7 +575,7 @@ export default function CanvasArea() {
         return;
       }
 
-      if (!['text', 'shape', 'inset'].includes(currentTool)) return;
+      if (!['text', 'shape', 'inset'].includes(currentTool)) return; // grid-place handled in its own handler above
 
       // Guard: ignore if we just placed an object in this same click cycle
       if (justPlacedRef.current) { justPlacedRef.current = false; return; }
@@ -577,20 +690,34 @@ export default function CanvasArea() {
   }, [fitViewRequest]);
 
   // ── Canvas size, zoom & background ───────────────────────────────────────
-  // Canvas element dimensions = doc size × zoom so the document boundary
-  // visually shrinks/grows with zoom rather than staying fixed.
+  // Canvas element = doc × zoom + 2×OVERFLOW_PAD so objects placed outside
+  // the document boundary are still rendered rather than silently clipped.
+  // The doc area is represented by docBgRef (a plain Rect) rather than
+  // fc.backgroundColor, so the overflow margin stays transparent and the
+  // CSS checkerboard shows through it.
   useEffect(() => {
-    const fc = fabricRef.current;
+    const fc    = fabricRef.current;
+    const bgRect = docBgRef.current;
     if (!fc) return;
-    fc.setDimensions({ width: Math.round(doc.width * zoom), height: Math.round(doc.height * zoom) });
-    fc.setZoom(zoom);
+    fc.setDimensions({
+      width:  Math.round(doc.width  * zoom) + 2 * OVERFLOW_PAD,
+      height: Math.round(doc.height * zoom) + 2 * OVERFLOW_PAD,
+    });
+    // Reset viewport so doc coord (0,0) maps to canvas pixel (OVERFLOW_PAD, OVERFLOW_PAD).
+    // This also resets any accumulated pan (matching previous setZoom() behaviour).
+    fc.setViewportTransform([zoom, 0, 0, zoom, OVERFLOW_PAD, OVERFLOW_PAD]);
+    if (bgRect) {
+      bgRect.set({ width: doc.width, height: doc.height });
+      fc.sendObjectToBack(bgRect);
+    }
     fc.renderAll();
   }, [zoom, doc.width, doc.height]);
 
   useEffect(() => {
+    const bgRect = docBgRef.current;
     const fc = fabricRef.current;
-    if (!fc) return;
-    fc.backgroundColor = doc.background;
+    if (!bgRect || !fc) return;
+    bgRect.set({ fill: doc.background });
     fc.renderAll();
   }, [doc.background]);
 
@@ -603,7 +730,7 @@ export default function CanvasArea() {
     if (tool === 'pan') {
       fc.defaultCursor = 'grab';
       fc.selection = false;
-    } else if (['text', 'shape', 'scalebar', 'inset'].includes(tool)) {
+    } else if (['text', 'shape', 'scalebar', 'inset', 'grid-place'].includes(tool)) {
       fc.defaultCursor = 'crosshair';
       fc.selection = false;
     } else {
@@ -678,7 +805,7 @@ export default function CanvasArea() {
       const fc = fabricRef.current;
       if (!fc) return;
       if      (restore === 'pan')   { fc.defaultCursor = 'grab'; fc.selection = false; }
-      else if (['text','shape','scalebar','inset'].includes(restore))
+      else if (['text','shape','scalebar','inset','grid-place'].includes(restore))
                                     { fc.defaultCursor = 'crosshair'; fc.selection = false; }
       else                          { fc.defaultCursor = 'default'; fc.selection = true; }
       fc.getObjects().forEach(o => {
@@ -711,11 +838,16 @@ export default function CanvasArea() {
   // ── Sync store objects → Fabric canvas ───────────────────────────────
   // fabricReady ensures this re-runs once after the canvas initializes,
   // so rehydrated state (images loaded from IndexedDB) gets drawn.
+  // We read from useStore.getState() directly (rather than the closure's
+  // doc/groups) so we always operate on the absolute freshest state and
+  // eliminate any stale-closure snap-back when React batches updates.
   useEffect(() => {
     const fc = fabricRef.current;
     if (!fc) return;
 
-    const storeIds = new Set(doc.objects.map(o => o.id));
+    const { doc: freshDoc, groups: freshGroups } = useStore.getState();
+
+    const storeIds = new Set(freshDoc.objects.map(o => o.id));
 
     const toRemove: fabric.FabricObject[] = [];
     fc.getObjects().forEach(fObj => {
@@ -723,11 +855,15 @@ export default function CanvasArea() {
       if (id && !storeIds.has(id)) toRemove.push(fObj);
     });
     toRemove.forEach(o => {
+      // Also remove scale bar label image if one is attached to this object
+      type WithLabel = fabric.FabricObject & { storeId?: string; _labelFab?: fabric.FabricImage };
+      const withLabel = o as WithLabel;
+      if (withLabel._labelFab) fc.remove(withLabel._labelFab);
       fc.remove(o);
-      objMapRef.current.delete((o as fabric.FabricObject & { storeId?: string }).storeId!);
+      objMapRef.current.delete(withLabel.storeId!);
     });
 
-    doc.objects.forEach(obj => {
+    freshDoc.objects.forEach(obj => {
       const existing = objMapRef.current.get(obj.id) as (fabric.FabricObject & { storeId?: string; _latexKey?: string }) | undefined;
       if (existing) {
         // Sentinel: async render is in flight — don't sync or re-create yet
@@ -740,53 +876,18 @@ export default function CanvasArea() {
           if (existing._latexKey !== newKey) {
             fc.remove(existing);
             objMapRef.current.delete(obj.id);
-            createFabricObject(obj, groups, fc, objMapRef.current);
+            createFabricObject(obj, freshGroups, fc, objMapRef.current);
             return;
           }
         }
         syncFabricProps(existing, obj);
       } else {
-        createFabricObject(obj, groups, fc, objMapRef.current);
+        createFabricObject(obj, freshGroups, fc, objMapRef.current);
       }
     });
 
-    // ── Mode tag overlay ──────────────────────────────────────────────
-    // Always remove all existing tags and recreate from store state.
-    // In-place update caused stale references after canvas re-init and
-    // orphaned tags that couldn't be removed (duplicates during drag).
-    for (const entry of modeTagMapRef.current.values()) {
-      fc.remove(entry.bg);
-      fc.remove(entry.tag);
-    }
-    modeTagMapRef.current.clear();
-
-    doc.objects.forEach(obj => {
-      if (obj.type !== 'image') return;
-      const o = obj as ImageObject;
-      if (!(o as unknown as Record<string, unknown>)['showModeTag']) return;
-      const tagText = o.mode ?? '';
-      if (!tagText) return;
-      const pad = 4, fSize = 11;
-      const tagW = tagText.length * fSize * 0.65 + pad * 2;
-      const tagH = fSize + pad * 2;
-      const tp = (o as unknown as Record<string, unknown>)['tagPosition'] as string ?? 'tl';
-      const tx = tp === 'tl' || tp === 'bl' ? o.x + pad : o.x + o.width  - tagW - pad;
-      const ty = tp === 'tl' || tp === 'tr' ? o.y + pad : o.y + o.height - tagH - pad;
-      const bg = new fabric.Rect({
-        left: tx, top: ty, width: tagW, height: tagH,
-        fill: 'rgba(0,0,0,0.55)', selectable: false, evented: false,
-      });
-      const tag = new fabric.Text(tagText, {
-        left: tx + pad, top: ty + pad,
-        fontSize: fSize, fontWeight: 'bold',
-        fontFamily: 'Inter, system-ui, sans-serif',
-        fill: '#ffffff', selectable: false, evented: false,
-      });
-      fc.add(bg);
-      fc.add(tag);
-      modeTagMapRef.current.set(obj.id, { bg, tag });
-    });
-
+    // Keep the document background rect behind all user objects
+    if (docBgRef.current) fc.sendObjectToBack(docBgRef.current);
     fc.renderAll();
   }, [doc.objects, groups, fabricReady]);
 
@@ -848,6 +949,7 @@ export default function CanvasArea() {
       }
     }
 
+    if (docBgRef.current) fc.sendObjectToBack(docBgRef.current);
     fc.renderAll();
   }, [insets, doc.objects]);
 
@@ -865,13 +967,14 @@ export default function CanvasArea() {
     const img   = group?.images.find(i => i.id === imageId);
     if (!img) return;
 
-    const fc       = fabricRef.current;
-    const wrapRect = wrapRef.current?.getBoundingClientRect();
-    if (!fc || !wrapRect) return;
-
+    const fc = fabricRef.current;
+    if (!fc) return;
+    // Use the canvas element's bounding rect (not the wrapper) so the coord
+    // calculation works regardless of OVERFLOW_PAD or wrapper centering offset.
+    const canvasRect = fc.getElement().getBoundingClientRect();
     const vpt = fc.viewportTransform;
-    const cx  = (e.clientX - wrapRect.left - vpt[4]) / zoomRef.current;
-    const cy  = (e.clientY - wrapRect.top  - vpt[5]) / zoomRef.current;
+    const cx  = (e.clientX - canvasRect.left - vpt[4]) / zoomRef.current;
+    const cy  = (e.clientY - canvasRect.top  - vpt[5]) / zoomRef.current;
 
     // Place at original pixel size; scale down only if larger than canvas
     const fitScale = Math.min(1, freshDoc.width / img.width, freshDoc.height / img.height);
@@ -906,12 +1009,13 @@ export default function CanvasArea() {
     const srcImg = group?.images.find(i => i.id === parentObj.imageId);
     if (!srcImg) return;
 
-    // Use getBoundingRect for reliable coordinates after any resize/rotate transforms
-    const br   = cropRect.getBoundingRect();
-    const crLeft = br.left;
-    const crTop  = br.top;
-    const crW    = br.width;
-    const crH    = br.height;
+    // Use scene-space coords directly — cropRect.left/top are document coords,
+    // unaffected by viewport zoom/pan (getBoundingRect returns viewport pixels, which
+    // would mismatch the scene-space parentObj.x/y).
+    const crLeft = cropRect.left ?? 0;
+    const crTop  = cropRect.top  ?? 0;
+    const crW    = cropRect.getScaledWidth();
+    const crH    = cropRect.getScaledHeight();
 
     const relX = crLeft - parentObj.x;
     const relY = crTop  - parentObj.y;
@@ -1069,6 +1173,27 @@ export default function CanvasArea() {
         </div>
       )}
 
+      {/* Grid placement hint */}
+      {tool === 'grid-place' && pendingGrid && (
+        <div style={{
+          position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
+          background: 'var(--bg-overlay)', border: '1px solid var(--accent)',
+          borderRadius: 8, padding: '7px 14px', zIndex: 20,
+          display: 'flex', alignItems: 'center', gap: 10,
+        }}>
+          <span style={{ fontSize: 12, color: 'var(--accent)' }}>
+            {pendingGrid.cols} col{pendingGrid.cols !== 1 ? 's' : ''} ×{' '}
+            {Math.ceil(pendingGrid.imageIds.length / pendingGrid.cols)} rows
+            ({pendingGrid.imageIds.length} image{pendingGrid.imageIds.length !== 1 ? 's' : ''})
+            &ensp;—&ensp;click and drag to set grid area
+          </span>
+          <button className="btn btn-ghost" style={{ fontSize: 11 }} onClick={() => {
+            setPendingGrid(null);
+            setTool('select');
+          }}>Cancel</button>
+        </div>
+      )}
+
       {/* Inset click prompt */}
       {tool === 'inset' && insetPhase === 'idle' && (
         <div style={{
@@ -1082,15 +1207,21 @@ export default function CanvasArea() {
         </div>
       )}
 
-      {/* Fabric canvas */}
-      <div style={{
-        position: 'relative', flexShrink: 0,
-        boxShadow: '0 0 0 1px rgba(255,255,255,0.08), 0 12px 48px rgba(0,0,0,0.7)',
-        outline: '1px solid rgba(255,255,255,0.06)',
-      }}>
+      {/* Fabric canvas — OVERFLOW_PAD pixels larger than the document on all sides */}
+      <div style={{ position: 'relative', flexShrink: 0 }}>
         <canvas ref={canvasElRef} />
 
-        {/* Smart alignment guides */}
+        {/* Page-boundary shadow: outlines only the document area, not the full canvas */}
+        <div style={{
+          position: 'absolute', pointerEvents: 'none', zIndex: 1,
+          left: OVERFLOW_PAD, top: OVERFLOW_PAD,
+          width:  Math.round(doc.width  * zoom),
+          height: Math.round(doc.height * zoom),
+          boxShadow: '0 0 0 1px rgba(255,255,255,0.08), 0 12px 48px rgba(0,0,0,0.7)',
+          outline: '1px solid rgba(255,255,255,0.06)',
+        }} />
+
+        {/* Smart alignment guides — g.pos is in canvas pixels (includes OVERFLOW_PAD) */}
         {guides.map((g, i) => (
           <div key={i} style={{
             position: 'absolute', pointerEvents: 'none', zIndex: 12,
@@ -1101,16 +1232,17 @@ export default function CanvasArea() {
           }} />
         ))}
 
-        {/* Rulers */}
+        {/* Rulers — anchored to the document area (offset by OVERFLOW_PAD) */}
         {showRulers && (
           <>
-            <RulerOverlay orientation="horizontal" size={Math.round(doc.width * zoom)} zoom={zoom} dpi={doc.dpi} docSize={doc.width} rulerUnit={rulerUnit} />
-            <RulerOverlay orientation="vertical"   size={Math.round(doc.height * zoom)} zoom={zoom} dpi={doc.dpi} docSize={doc.height} rulerUnit={rulerUnit} />
+            <RulerOverlay orientation="horizontal" size={Math.round(doc.width * zoom)} zoom={zoom} dpi={doc.dpi} docSize={doc.width} rulerUnit={rulerUnit} left={OVERFLOW_PAD} />
+            <RulerOverlay orientation="vertical"   size={Math.round(doc.height * zoom)} zoom={zoom} dpi={doc.dpi} docSize={doc.height} rulerUnit={rulerUnit} top={OVERFLOW_PAD} />
             {/* Unit toggle in the ruler corner */}
             <button
               onClick={toggleRulerUnit}
               style={{
-                position: 'absolute', top: -18, left: -18,
+                position: 'absolute',
+                top: OVERFLOW_PAD - 18, left: OVERFLOW_PAD - 18,
                 width: 18, height: 18, padding: 0,
                 background: 'rgba(20,20,28,0.88)', border: '1px solid rgba(255,255,255,0.08)',
                 color: 'rgba(255,255,255,0.6)', fontSize: 7, lineHeight: 1,
@@ -1155,13 +1287,29 @@ function createFabricObject(
     const img   = group?.images.find(i => i.id === obj.imageId);
     if (!img) return;
 
+    // Sentinel: reserve map slot before the async load so that if the sync
+    // effect fires again (e.g. user adds text while image is loading), the
+    // second call sees the sentinel and bails rather than starting a duplicate load.
+    const sentinel = {} as fabric.FabricObject;
+    map.set(obj.id, sentinel);
+
     fabric.FabricImage.fromURL(img.dataUrl).then((fImg) => {
+      if (map.get(obj.id) !== sentinel) return; // superseded — newer load or deletion
       if (!fc.getElement()) return; // canvas disposed
-      const o = obj as ImageObject;
-      fImg.set({ left: o.x, top: o.y, angle: o.rotation, opacity: o.opacity });
-      fImg.scaleToWidth(o.width);
-      applyBorder(fImg, o.border);
-      applyAdjustments(fImg, o.adjustments ?? DEFAULT_ADJUSTMENTS);
+      // Re-read from store rather than using the closure's obj — the user may
+      // have moved/resized this image while fromURL was in flight, and using
+      // stale closure coords would snap it back to its original spawn position.
+      const live = useStore.getState().doc.objects.find(o => o.id === obj.id) as ImageObject | undefined;
+      if (!live) return; // deleted while loading
+      const nativeW = fImg.width  || 1;
+      const nativeH = fImg.height || 1;
+      fImg.set({
+        left: live.x, top: live.y, angle: live.rotation, opacity: live.opacity,
+        scaleX: live.width  / nativeW,
+        scaleY: live.height / nativeH,
+      });
+      applyBorder(fImg, live.border);
+      applyAdjustments(fImg, live.adjustments ?? DEFAULT_ADJUSTMENTS);
       (fImg as typeof fImg & { storeId: string }).storeId = obj.id;
       fc.add(fImg);
       map.set(obj.id, fImg);
@@ -1281,7 +1429,9 @@ function createFabricObject(
     fc.add(grp);
     map.set(obj.id, grp);
 
-    // Render label as LaTeX image and add below bar
+    // Render label as LaTeX image, add below bar, and attach ref to group so
+    // syncFabricProps can reposition it when the scale bar is moved.
+    type GrpWithLabel = typeof grp & { _labelFab?: fabric.FabricImage };
     renderLatexToDataUrl(labelLatex, o.fontSize ?? 13, o.labelColor).then(({ dataUrl, width, height: _lh }) => {
       if (!dataUrl || !fc.getElement()) return;
       if (!fc.getObjects().includes(grp)) return;
@@ -1301,6 +1451,7 @@ function createFabricObject(
           evented: false,
         });
         (lbl as typeof lbl & { _scalebarLabel: string })._scalebarLabel = obj.id;
+        (grp as GrpWithLabel)._labelFab = lbl;
         fc.add(lbl);
         fc.renderAll();
       });
@@ -1322,6 +1473,9 @@ function syncFabricProps(
   obj: CanvasObject,
 ) {
   fObj.set({ left: obj.x, top: obj.y, angle: obj.rotation, visible: obj.visible, selectable: !obj.locked });
+  // setCoords() updates cached bounding-box / transform so the next renderAll()
+  // uses the new position rather than Fabric's stale cached coords.
+  fObj.setCoords();
 
   if (obj.type === 'image') {
     const o = obj as ImageObject;
@@ -1350,5 +1504,18 @@ function syncFabricProps(
     const o = obj as ShapeObject;
     fObj.set({ fill: o.fillOpacity === 0 ? 'transparent' : o.fill });
     applyBorder(fObj, o.border);
+  }
+
+  if (obj.type === 'scalebar') {
+    const o = obj as ScaleBarObject;
+    type GrpWithLabel = fabric.FabricObject & { _labelFab?: fabric.FabricImage };
+    const grp = fObj as GrpWithLabel;
+    if (grp._labelFab) {
+      grp._labelFab.set({
+        left: o.x + o.length / 2,
+        top:  o.y + o.thickness + 6,
+        angle: o.rotation,
+      });
+    }
   }
 }

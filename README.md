@@ -27,3 +27,4 @@ Petro Graphs is a native desktop application built with [Tauri](https://tauri.ap
 - `npm run dev` runs the frontend only in a browser (no Tauri APIs). All canvas features work; native file dialogs do not.
 - Unit tests (`npm test`) run in jsdom and do not require Rust or Tauri.
 
+

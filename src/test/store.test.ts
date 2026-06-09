@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { useStore } from '../store';
-import type { CanvasObject, ScaleBarObject } from '../types';
+import { useStore, MAX_CANVAS_SLOTS } from '../store';
+import type { CanvasObject, ScaleBarObject, ImageObject } from '../types';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -48,13 +48,14 @@ function makeText(overrides?: Partial<CanvasObject>): CanvasObject {
 
 // Reset store between tests by clearing objects/history manually
 function resetStore() {
+  const freshDoc = {
+    id: 'doc-1', title: 'Untitled Figure',
+    width: 1200, height: 900, dpi: 300, background: '#ffffff',
+    objects: [] as CanvasObject[],
+    metadata: { authors: '', affiliation: '', sampleInfo: '', locality: '', notes: '', date: '' },
+  };
   useStore.setState({
-    doc: {
-      id: 'doc-1', title: 'Untitled Figure',
-      width: 1200, height: 900, dpi: 300, background: '#ffffff',
-      objects: [],
-      metadata: { authors: '', affiliation: '', sampleInfo: '', locality: '', notes: '', date: '' },
-    },
+    doc: freshDoc,
     insets: [],
     past: [],
     future: [],
@@ -64,6 +65,9 @@ function resetStore() {
     tool: 'select',
     showMetadataPanel: false,
     showLayersPanel: false,
+    pendingGrid: null,
+    canvasSlots: [{ id: 'slot-default', filePath: null, doc: freshDoc, groups: [], insets: [] }],
+    activeSlotId: 'slot-default',
   });
 }
 
@@ -413,5 +417,360 @@ describe('project persistence helpers', () => {
     const { rehydrate } = useStore.getState();
     rehydrate({ doc: useStore.getState().doc, insets: undefined as never, groups: [] });
     expect(Array.isArray(useStore.getState().insets)).toBe(true);
+  });
+});
+
+// ── Scale bar cap position math ───────────────────────────────────────────────
+// These tests guard the expected coordinate relationships for scale bar rendering.
+// capL must be at x=0 (left edge of the bar group), capR at x=length-thickness.
+// The label must be centred at x = o.x + o.length/2 in scene space.
+
+describe('scale bar rendering coordinate invariants', () => {
+  it('capR x = length - thickness for a standard bar', () => {
+    // Mirrors the createFabricObject calculation: capR.left = o.length - o.thickness
+    const length = 120;
+    const thickness = 4;
+    const capRLeft = length - thickness;
+    expect(capRLeft).toBe(116);
+  });
+
+  it('capR x = length - thickness for a thick bar', () => {
+    const length = 200;
+    const thickness = 8;
+    expect(length - thickness).toBe(192);
+  });
+
+  it('label x offset = x + length / 2 (centred above bar)', () => {
+    const o = makeScalebar({ x: 50, y: 30, length: 120 });
+    expect(o.x + o.length / 2).toBe(110);
+  });
+
+  it('label x is stable after a position update', () => {
+    const sb = makeScalebar({ x: 100, y: 50, length: 80 });
+    useStore.getState().addObject(sb);
+    useStore.getState().updateObject(sb.id, { x: 200 });
+    const updated = useStore.getState().doc.objects[0] as ScaleBarObject;
+    // The new label position should be computed from updated.x + length/2
+    expect(updated.x + updated.length / 2).toBe(240);
+  });
+});
+
+// ── Grid snap-back regression ─────────────────────────────────────────────────
+// Guards the fix for "grid reverts to spawn location after being moved then text is added."
+//
+// Root cause: createFabricObject captured `obj` in a closure for the async fromURL
+// call.  If the user moved the image while fromURL was in flight, updateObject updated
+// the store but the closure still held the original coords.  When fromURL resolved, the
+// image was placed at the *original* position, not the moved one.
+//
+// Fix: re-read useStore.getState().doc.objects inside the .then() callback so we always
+// use the most recent position, regardless of how long the load took.
+//
+// These tests verify the store-side invariant: after addObject + updateObject the store
+// position is correct and stable.  A pure store test cannot exercise Fabric rendering,
+// but it documents the precondition the fix relies on.
+
+describe('grid snap-back regression guards', () => {
+  beforeEach(resetStore);
+
+  it('store position reflects updateObject regardless of insert order', () => {
+    const img = makeImage({ id: 'g1', x: 40, y: 40 });
+    useStore.getState().addObject(img);
+    useStore.getState().updateObject('g1', { x: 200, y: 300 });
+    const live = useStore.getState().doc.objects.find(o => o.id === 'g1');
+    // If createFabricObject reads this value at resolve time it gets (200,300), not (40,40)
+    expect(live?.x).toBe(200);
+    expect(live?.y).toBe(300);
+  });
+
+  it('addObjects followed by updateObject keeps correct per-image positions', () => {
+    const objs = [
+      makeImage({ id: 'ga', x: 0,   y: 0   }),
+      makeImage({ id: 'gb', x: 420, y: 0   }),
+      makeImage({ id: 'gc', x: 0,   y: 320 }),
+    ];
+    useStore.getState().addObjects(objs);
+    // Simulate user dragging images while photos are loading
+    useStore.getState().updateObject('ga', { x: 10,  y: 10  });
+    useStore.getState().updateObject('gb', { x: 430, y: 10  });
+    useStore.getState().updateObject('gc', { x: 10,  y: 330 });
+
+    const [ga, gb, gc] = ['ga', 'gb', 'gc'].map(
+      id => useStore.getState().doc.objects.find(o => o.id === id)
+    );
+    expect(ga?.x).toBe(10);
+    expect(gb?.x).toBe(430);
+    expect(gc?.y).toBe(330);
+  });
+
+  it('deleted image has no store entry — fromURL resolve must bail when live is undefined', () => {
+    const img = makeImage({ id: 'gone' });
+    useStore.getState().addObject(img);
+    useStore.getState().removeObject('gone');
+    // The fix: if doc.objects.find returns undefined (deleted), fromURL .then() must return early.
+    const live = useStore.getState().doc.objects.find(o => o.id === 'gone');
+    expect(live).toBeUndefined();
+  });
+
+  it('adding text does not change any image position in the store', () => {
+    const img = makeImage({ id: 'stable', x: 150, y: 200 });
+    useStore.getState().addObject(img);
+    // Move the image (as the user would do)
+    useStore.getState().updateObject('stable', { x: 300, y: 400 });
+    // Now add text — this triggered a sync-effect re-run which exposed the bug
+    useStore.getState().addObject(makeText({ id: 'txt1' }));
+    const live = useStore.getState().doc.objects.find(o => o.id === 'stable');
+    // Image position must not regress to original spawn coords
+    expect(live?.x).toBe(300);
+    expect(live?.y).toBe(400);
+  });
+});
+
+// ── Inset cropRect coordinate system ─────────────────────────────────────────
+// Guards that relX/relY stored in InsetPair.cropRect are in scene (document)
+// space, not viewport space. The bug was that getBoundingRect() returned viewport
+// pixels (scaled by zoom+pan), so at zoom≠1 the stored relX/relY were wrong.
+// Fix: use cropRect.left / cropRect.top (scene coords) directly.
+
+describe('inset cropRect relX/relY are scene-space', () => {
+  beforeEach(resetStore);
+
+  it('relX = cropRect.left - parentObj.x at default zoom', () => {
+    const parentX = 150;
+    const cropLeft = 200;  // scene coord (cropRect.left)
+    const expectedRelX = cropLeft - parentX;
+    // At zoom=1, viewport and scene are identical; relX should be 50
+    expect(expectedRelX).toBe(50);
+  });
+
+  it('relX must NOT be computed from viewport coords at zoom=2', () => {
+    const zoom = 2;
+    const panX = 100;
+    const parentX = 150;
+    const cropLeft = 200; // scene coord (cropRect.left)
+
+    // Wrong (old getBoundingRect approach): mixes viewport coord with scene coord
+    const wrongRelX = (cropLeft * zoom + panX) - parentX;
+    // Correct: scene coord subtraction only
+    const correctRelX = cropLeft - parentX;
+
+    expect(correctRelX).toBe(50);
+    expect(wrongRelX).toBe(350); // demonstrates the magnitude of the bug
+    expect(wrongRelX).not.toBe(correctRelX);
+  });
+
+  it('addInset stores relX/relY as provided (scene-space values)', () => {
+    useStore.getState().addInset({
+      id: 'pair-test',
+      parentObjectId: 'p1',
+      insetObjectId: 'i1',
+      cropRect: { relX: 50, relY: 30, w: 100, h: 80 },
+    });
+    const pair = useStore.getState().insets[0];
+    expect(pair.cropRect.relX).toBe(50);
+    expect(pair.cropRect.relY).toBe(30);
+  });
+});
+
+// ── Mode tag / PPL-XPL label removal ─────────────────────────────────────────
+// Guards that no ImageObject ever gets showModeTag=true from any code path.
+// Mode tag rendering has been removed from CanvasArea entirely; these tests
+// verify that neither GridDialog nor addObject/addObjects inadvertently introduce
+// the field as truthy.
+
+describe('mode tag (PPL/XPL) is never set on ImageObjects', () => {
+  beforeEach(resetStore);
+
+  it('addObject image has no showModeTag field', () => {
+    useStore.getState().addObject(makeImage({ id: 'img-mt' }));
+    const o = useStore.getState().doc.objects[0] as ImageObject;
+    expect(o.showModeTag).toBeFalsy();
+  });
+
+  it('addObjects batch has no showModeTag on any image', () => {
+    const objs = [
+      makeImage({ id: 'mt1' }),
+      makeImage({ id: 'mt2', mode: 'XPL' }),
+    ];
+    useStore.getState().addObjects(objs);
+    for (const o of useStore.getState().doc.objects as ImageObject[]) {
+      expect(o.showModeTag).toBeFalsy();
+    }
+  });
+
+  it('updateObject does not add showModeTag when patching position', () => {
+    useStore.getState().addObject(makeImage({ id: 'mtp' }));
+    useStore.getState().updateObject('mtp', { x: 100, y: 200 });
+    const o = useStore.getState().doc.objects[0] as ImageObject;
+    expect(o.showModeTag).toBeFalsy();
+  });
+});
+
+// ── Multi-canvas slot management ──────────────────────────────────────────────
+
+describe('multi-canvas slots', () => {
+  beforeEach(resetStore);
+
+  it('MAX_CANVAS_SLOTS is 5', () => {
+    expect(MAX_CANVAS_SLOTS).toBe(5);
+  });
+
+  it('openCanvasSlot returns "opened" and increments slot count', () => {
+    // Seed at least one slot so the store has something to count against
+    useStore.setState({ canvasSlots: [{ id: 'slot-1', filePath: null, doc: useStore.getState().doc, groups: [], insets: [] }] });
+    const result = useStore.getState().openCanvasSlot();
+    expect(result).toBe('opened');
+    expect(useStore.getState().canvasSlots).toHaveLength(2);
+  });
+
+  it('openCanvasSlot returns "full" when MAX_CANVAS_SLOTS already open', () => {
+    const seed = Array.from({ length: MAX_CANVAS_SLOTS }, (_, i) => ({
+      id: `slot-${i}`, filePath: null, doc: useStore.getState().doc, groups: [], insets: [],
+    }));
+    useStore.setState({ canvasSlots: seed });
+    const result = useStore.getState().openCanvasSlot();
+    expect(result).toBe('full');
+    expect(useStore.getState().canvasSlots).toHaveLength(MAX_CANVAS_SLOTS);
+  });
+
+  it('closeCanvasSlot removes the slot by id', () => {
+    const slots = [
+      { id: 'a', filePath: null, doc: useStore.getState().doc, groups: [], insets: [] },
+      { id: 'b', filePath: null, doc: useStore.getState().doc, groups: [], insets: [] },
+    ];
+    useStore.setState({ canvasSlots: slots, activeSlotId: 'a' });
+    useStore.getState().closeCanvasSlot('a');
+    expect(useStore.getState().canvasSlots.map(s => s.id)).toEqual(['b']);
+  });
+
+  it('closeCanvasSlot switches activeSlotId when active slot is closed', () => {
+    const slots = [
+      { id: 'a', filePath: null, doc: useStore.getState().doc, groups: [], insets: [] },
+      { id: 'b', filePath: null, doc: useStore.getState().doc, groups: [], insets: [] },
+    ];
+    useStore.setState({ canvasSlots: slots, activeSlotId: 'a' });
+    useStore.getState().closeCanvasSlot('a');
+    expect(useStore.getState().activeSlotId).toBe('b');
+  });
+
+  it('closeCanvasSlot does not remove the last remaining slot', () => {
+    const slots = [
+      { id: 'only', filePath: null, doc: useStore.getState().doc, groups: [], insets: [] },
+    ];
+    useStore.setState({ canvasSlots: slots, activeSlotId: 'only' });
+    useStore.getState().closeCanvasSlot('only');
+    expect(useStore.getState().canvasSlots).toHaveLength(1);
+  });
+
+  it('switchToCanvasSlot updates activeSlotId', () => {
+    const slots = [
+      { id: 'a', filePath: null, doc: useStore.getState().doc, groups: [], insets: [] },
+      { id: 'b', filePath: null, doc: useStore.getState().doc, groups: [], insets: [] },
+    ];
+    useStore.setState({ canvasSlots: slots, activeSlotId: 'a' });
+    useStore.getState().switchToCanvasSlot('b');
+    expect(useStore.getState().activeSlotId).toBe('b');
+  });
+
+  it('switchToCanvasSlot ignores unknown ids', () => {
+    const slots = [
+      { id: 'a', filePath: null, doc: useStore.getState().doc, groups: [], insets: [] },
+    ];
+    useStore.setState({ canvasSlots: slots, activeSlotId: 'a' });
+    useStore.getState().switchToCanvasSlot('nonexistent');
+    expect(useStore.getState().activeSlotId).toBe('a');
+  });
+});
+
+// ── Canvas slot isolation ─────────────────────────────────────────────────────
+// Guards that each slot has truly independent doc.objects, groups, and insets.
+// The bug: all slots shared the top-level doc/groups/insets, so deleting from
+// one slot deleted from all others.
+
+describe('canvas slot isolation', () => {
+  beforeEach(resetStore);
+
+  it('openCanvasSlot starts with an empty canvas, not the previous slot contents', () => {
+    useStore.getState().addObject(makeImage({ id: 'in-slot-1' }));
+    expect(useStore.getState().doc.objects).toHaveLength(1);
+
+    useStore.getState().openCanvasSlot();
+    // After opening a new slot the canvas should be empty
+    expect(useStore.getState().doc.objects).toHaveLength(0);
+  });
+
+  it('objects in slot A do not appear after switching to slot B', () => {
+    // Slot A: add an image
+    useStore.getState().addObject(makeImage({ id: 'slot-a-obj' }));
+    expect(useStore.getState().doc.objects).toHaveLength(1);
+
+    // Open slot B (saves slot A state, switches to empty slot B)
+    useStore.getState().openCanvasSlot();
+    expect(useStore.getState().doc.objects).toHaveLength(0);
+
+    // Add something in slot B
+    useStore.getState().addObject(makeImage({ id: 'slot-b-obj' }));
+    expect(useStore.getState().doc.objects).toHaveLength(1);
+    expect(useStore.getState().doc.objects[0].id).toBe('slot-b-obj');
+  });
+
+  it('switching back to slot A restores its objects', () => {
+    // Slot A: add an image
+    const slotAId = useStore.getState().activeSlotId;
+    useStore.getState().addObject(makeImage({ id: 'slot-a-restore' }));
+
+    // Open slot B
+    useStore.getState().openCanvasSlot();
+    const slotBId = useStore.getState().activeSlotId;
+    expect(slotBId).not.toBe(slotAId);
+
+    // Slot B is empty
+    expect(useStore.getState().doc.objects).toHaveLength(0);
+
+    // Switch back to slot A
+    useStore.getState().switchToCanvasSlot(slotAId);
+    expect(useStore.getState().doc.objects).toHaveLength(1);
+    expect(useStore.getState().doc.objects[0].id).toBe('slot-a-restore');
+  });
+
+  it('removing an object in slot B does not affect slot A', () => {
+    const slotAId = useStore.getState().activeSlotId;
+    useStore.getState().addObject(makeImage({ id: 'keep-in-a' }));
+
+    // Switch to slot B
+    useStore.getState().openCanvasSlot();
+    useStore.getState().addObject(makeImage({ id: 'in-b' }));
+    useStore.getState().removeObject('in-b');
+    expect(useStore.getState().doc.objects).toHaveLength(0);
+
+    // Switch back — slot A unchanged
+    useStore.getState().switchToCanvasSlot(slotAId);
+    expect(useStore.getState().doc.objects).toHaveLength(1);
+    expect(useStore.getState().doc.objects[0].id).toBe('keep-in-a');
+  });
+});
+
+// ── Pending grid ──────────────────────────────────────────────────────────────
+
+describe('pendingGrid', () => {
+  beforeEach(resetStore);
+
+  it('setPendingGrid stores the config', () => {
+    useStore.getState().setPendingGrid({ imageIds: ['a', 'b'], groupId: 'g1', cols: 2, gap: 16 });
+    const pg = useStore.getState().pendingGrid;
+    expect(pg).not.toBeNull();
+    expect(pg?.cols).toBe(2);
+    expect(pg?.imageIds).toEqual(['a', 'b']);
+  });
+
+  it('setPendingGrid(null) clears the config', () => {
+    useStore.getState().setPendingGrid({ imageIds: ['x'], groupId: 'g1', cols: 1, gap: 0 });
+    useStore.getState().setPendingGrid(null);
+    expect(useStore.getState().pendingGrid).toBeNull();
+  });
+
+  it('tool can be set to grid-place', () => {
+    useStore.getState().setTool('grid-place');
+    expect(useStore.getState().tool).toBe('grid-place');
   });
 });

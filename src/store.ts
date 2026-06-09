@@ -2,8 +2,10 @@ import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
 import type {
-  CanvasDoc, CanvasObject, ImageGroup, ThinSectionImage, Tool, InsetPair, ImageCalibration,
+  CanvasDoc, CanvasObject, ImageGroup, ThinSectionImage, Tool, InsetPair, ImageCalibration, CanvasSlot, PendingGrid,
 } from './types';
+
+export const MAX_CANVAS_SLOTS = 5;
 
 // ── Persistence ────────────────────────────────────────────────────────────
 const IDB_KEY = 'petrofigure-state-v1';
@@ -184,6 +186,26 @@ export interface AppState {
 
   /** Swap canvas width ↔ height and reposition all objects proportionally */
   flipOrientation: () => void;
+
+  // ── Grid placement ────────────────────────────────────────────────────────
+  /** Set when GridDialog confirms; cleared by CanvasArea after placement. */
+  pendingGrid: PendingGrid | null;
+  setPendingGrid: (g: PendingGrid | null) => void;
+
+  // ── Multi-canvas slot management (up to MAX_CANVAS_SLOTS) ────────────────
+  /** All currently open canvas slots (at least 1 — the default slot). */
+  canvasSlots: CanvasSlot[];
+  /** ID of the slot currently displayed in the canvas area. */
+  activeSlotId: string;
+  /**
+   * Open a new empty canvas slot. Returns 'full' if MAX_CANVAS_SLOTS reached
+   * (caller should prompt user to close a slot first).
+   */
+  openCanvasSlot: () => 'opened' | 'full';
+  /** Close a canvas slot by id. Switches active slot if the closed one was active. */
+  closeCanvasSlot: (id: string) => void;
+  /** Make the slot with the given id the active canvas. NOT YET WIRED to CanvasArea. */
+  switchToCanvasSlot: (id: string) => void;
 }
 
 const defaultDoc: CanvasDoc = {
@@ -223,6 +245,13 @@ export const useStore = create<AppState>()(
       if (!Array.isArray(s.doc.objects)) s.doc.objects = [];
       s.groups = (saved.groups ?? []) as typeof s.groups;
       s.insets  = (saved.insets  ?? []) as typeof s.insets;
+      // Keep the active slot's snapshot in sync so slot-switching restores correctly
+      const activeSlot = s.canvasSlots.find(sl => sl.id === s.activeSlotId);
+      if (activeSlot) {
+        activeSlot.doc    = JSON.parse(JSON.stringify(s.doc));
+        activeSlot.groups = JSON.parse(JSON.stringify(s.groups));
+        activeSlot.insets = JSON.parse(JSON.stringify(s.insets));
+      }
     }),
 
     // ── Library ──────────────────────────────────────────────────────────
@@ -402,6 +431,9 @@ export const useStore = create<AppState>()(
       s.rulerUnit = s.rulerUnit === 'in' ? 'cm' : s.rulerUnit === 'cm' ? 'mm' : 'in';
     }),
 
+    pendingGrid: null,
+    setPendingGrid: (g) => set((s) => { s.pendingGrid = g; }),
+
     savedVersion: 0,
     markSaved: () => set((s) => { s.savedVersion = s.past.length; }),
     hasUnsavedChanges: (): boolean => {
@@ -426,6 +458,84 @@ export const useStore = create<AppState>()(
         if (obj.type === 'scalebar') obj.length = Math.round(obj.length * s1);
       });
       persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
+    }),
+
+    // ── Multi-canvas slots ────────────────────────────────────────────────
+    // Each slot owns its own doc/groups/insets snapshot.  The top-level
+    // doc/groups/insets are always the ACTIVE slot's live data.  On slot
+    // switch we snapshot the current state into the leaving slot and restore
+    // the target slot's snapshot, so each page is fully independent.
+    canvasSlots: [
+      { id: 'slot-default', filePath: null, doc: defaultDoc, groups: [], insets: [] },
+    ] as CanvasSlot[],
+    activeSlotId: 'slot-default',
+
+    openCanvasSlot: () => {
+      let result: 'opened' | 'full' = 'full';
+      set((s) => {
+        if (s.canvasSlots.length >= MAX_CANVAS_SLOTS) return;
+
+        // Snapshot current live state into the currently active slot
+        const cur = s.canvasSlots.find(sl => sl.id === s.activeSlotId);
+        if (cur) {
+          cur.doc    = JSON.parse(JSON.stringify(s.doc));
+          cur.groups = JSON.parse(JSON.stringify(s.groups));
+          cur.insets = JSON.parse(JSON.stringify(s.insets));
+        }
+
+        const id = `slot-${Date.now()}`;
+        const newDoc: CanvasDoc = {
+          ...defaultDoc,
+          id: `doc-${id}`,
+          title: 'Untitled Figure',
+          objects: [],
+          metadata: { ...defaultDoc.metadata },
+        };
+        const newSlot: CanvasSlot = { id, filePath: null, doc: newDoc, groups: [], insets: [] };
+        s.canvasSlots.push(newSlot);
+
+        // Switch live state to the new empty slot
+        s.doc    = newDoc as typeof s.doc;
+        s.groups = [] as typeof s.groups;
+        s.insets = [] as typeof s.insets;
+        s.activeSlotId = id;
+
+        result = 'opened';
+      });
+      return result;
+    },
+
+    closeCanvasSlot: (id) => set((s) => {
+      if (s.canvasSlots.length <= 1) return; // always keep at least one
+      const wasActive = s.activeSlotId === id;
+      s.canvasSlots = s.canvasSlots.filter(sl => sl.id !== id);
+      if (wasActive) {
+        const next = s.canvasSlots[s.canvasSlots.length - 1];
+        s.activeSlotId = next.id;
+        s.doc    = JSON.parse(JSON.stringify(next.doc));
+        s.groups = JSON.parse(JSON.stringify(next.groups));
+        s.insets = JSON.parse(JSON.stringify(next.insets));
+      }
+    }),
+
+    switchToCanvasSlot: (id) => set((s) => {
+      if (!s.canvasSlots.some(sl => sl.id === id)) return;
+      if (id === s.activeSlotId) return;
+
+      // Save current live state into the leaving slot
+      const cur = s.canvasSlots.find(sl => sl.id === s.activeSlotId);
+      if (cur) {
+        cur.doc    = JSON.parse(JSON.stringify(s.doc));
+        cur.groups = JSON.parse(JSON.stringify(s.groups));
+        cur.insets = JSON.parse(JSON.stringify(s.insets));
+      }
+
+      // Restore target slot's snapshot
+      const target = s.canvasSlots.find(sl => sl.id === id)!;
+      s.doc    = JSON.parse(JSON.stringify(target.doc));
+      s.groups = JSON.parse(JSON.stringify(target.groups));
+      s.insets = JSON.parse(JSON.stringify(target.insets));
+      s.activeSlotId = id;
     }),
   }))
 );

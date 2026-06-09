@@ -152,6 +152,27 @@ html, body, #root {
 }
 .page-tab-add:hover { color: var(--text-primary); background: rgba(201,168,76,0.07); }
 
+/* ── Slot-full dialog (close a canvas to make room) ───────────────────── */
+.slot-full-overlay {
+  position: fixed; inset: 0; z-index: 1000;
+  background: rgba(0,0,0,0.45);
+  display: flex; align-items: center; justify-content: center;
+}
+.slot-full-dialog {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  min-width: 260px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+.slot-full-title {
+  font-size: 12px; font-weight: 600;
+  color: var(--text-primary); margin-bottom: 10px;
+}
+.slot-full-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.slot-full-item { width: 100%; text-align: left; justify-content: flex-start; }
+
 /* ── Sidebar panels ────────────────────────────── */
 .sidebar {
   background: var(--bg-surface);
