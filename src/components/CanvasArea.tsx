@@ -183,6 +183,7 @@ export default function CanvasArea() {
     insets, addInset,
     addImageToGroup,
     selectedId, showRulers, rulerUnit, toggleRulerUnit,
+    fitViewRequest,
   } = useStore();
 
   // Compute whether the currently selected object is a calibrated image
@@ -545,8 +546,8 @@ export default function CanvasArea() {
   }, []);
 
 
-  // ── Auto-fit zoom when doc dimensions change ──────────────────────────
-  const prevDocSizeRef = useRef({ w: doc.width, h: doc.height });
+  // ── Auto-fit zoom on first load and when doc dimensions change ──────────
+  const prevDocSizeRef = useRef({ w: 0, h: 0 });
   useEffect(() => {
     const prev = prevDocSizeRef.current;
     if (prev.w === doc.width && prev.h === doc.height) return;
@@ -560,6 +561,20 @@ export default function CanvasArea() {
     );
     setZoom(Math.max(0.05, Math.min(4, fitZoom)));
   }, [doc.width, doc.height, setZoom]);
+
+  // ── fitView on demand (0 key, toolbar button) ─────────────────────────
+  useEffect(() => {
+    if (fitViewRequest === 0) return;
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const padded = 0.92;
+    const fitZoom = Math.min(
+      (wrap.clientWidth  * padded) / doc.width,
+      (wrap.clientHeight * padded) / doc.height,
+    );
+    setZoom(Math.max(0.05, Math.min(4, fitZoom)));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fitViewRequest]);
 
   // ── Canvas size, zoom & background ───────────────────────────────────────
   // Canvas element dimensions = doc size × zoom so the document boundary
