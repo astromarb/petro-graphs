@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { X, Download, FileImage, FileText, CheckCircle } from 'lucide-react';
-import { jsPDF } from 'jspdf';
+import { PDFDocument } from 'pdf-lib';
 import { useStore } from '../store';
 
 interface Props {
@@ -11,21 +11,19 @@ interface Props {
 type Format = 'png' | 'jpeg' | 'pdf';
 
 const RESOLUTIONS = [
-  { label: 'Screen (1×)',   value: 1   as const },
-  { label: '2× (HiDPI)',    value: 2   as const },
-  { label: '300 DPI',       value: 300 as const },
-  { label: '600 DPI',       value: 600 as const },
+  { label: '300 DPI', value: 300 as const },
+  { label: '600 DPI', value: 600 as const },
 ] as const;
 
 export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
   const { doc } = useStore();
-  const [format, setFormat]     = useState<Format>('png');
-  const [resOption, setResOption] = useState<1 | 2 | 300 | 600>(300);
-  const [quality, setQuality]   = useState(0.95);
-  const [busy, setBusy]         = useState(false);
-  const [error, setError]       = useState('');
+  const [format, setFormat]       = useState<Format>('png');
+  const [resOption, setResOption] = useState<300 | 600>(300);
+  const [quality, setQuality]     = useState(0.92);
+  const [busy, setBusy]           = useState(false);
+  const [error, setError]         = useState('');
   const [previewUrl, setPreviewUrl] = useState('');
-  const [progress, setProgress] = useState<{ phase: string; pct: number } | null>(null);
+  const [progress, setProgress]   = useState<{ phase: string; pct: number } | null>(null);
   const [exportDone, setExportDone] = useState(false);
   const prevBlobRef = useRef<string>('');
 
@@ -70,14 +68,30 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
     const savedVT = [...(fc.viewportTransform ?? [1,0,0,1,0,0])] as [number,number,number,number,number,number];
 
     try {
-      setProgress({ phase: 'Preparing canvas…', pct: 15 });
+      setProgress({ phase: 'Preparing canvas…', pct: 10 });
       await new Promise<void>(r => setTimeout(r, 16));
 
-      fc.setViewportTransform([currentZoom, 0, 0, currentZoom, 0, 0]);
+      // Disable retina scaling so lowerCanvasEl pixel buffer = CSS size exactly.
+      // (With retina on, pixel buffer = outW × devicePixelRatio which can exceed
+      //  browser canvas limits at 600 DPI and cause a blank result.)
+      fc_.enableRetinaScaling = false;
+
+      // Resize Fabric canvas to the full export resolution and set zoom to fill it.
+      // This renders every object at native export resolution — no upscaling.
+      const exportZoom = outW / doc.width;
+      fc.setDimensions({ width: outW, height: outH });
+
+      // Mark all objects dirty so cached clipPath renders are regenerated at the new zoom.
+      fc.getObjects().forEach(o => { (o as { dirty?: boolean }).dirty = true; });
+
+      fc.setViewportTransform([exportZoom, 0, 0, exportZoom, 0, 0]);
       fc.renderAll();
 
-      setProgress({ phase: 'Encoding image…', pct: 55 });
+      setProgress({ phase: 'Encoding image…', pct: 50 });
       await new Promise<void>(r => setTimeout(r, 16));
+
+      // Capture at 1:1 — no scaling needed since canvas is already at outW×outH.
+      const src = fc_.lowerCanvasEl as HTMLCanvasElement;
 
       let dataUrl: string;
       try {
@@ -95,25 +109,37 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
         throw new Error(`Canvas export failed: ${(e as Error).message}`);
       }
 
-      setProgress({ phase: 'Saving file…', pct: 85 });
+      setProgress({ phase: 'Saving file…', pct: 80 });
       await new Promise<void>(r => setTimeout(r, 16));
 
       const safeTitle = doc.title.replace(/[^a-z0-9_-]/gi, '_') || 'figure';
 
       if (format === 'pdf') {
-        const landscape = outW > outH;
-        const ptW = outW * 72 / (resOption <= 2 ? 96 * resOption : resOption);
-        const ptH = outH * 72 / (resOption <= 2 ? 96 * resOption : resOption);
-        const pdf = new jsPDF({
-          orientation: landscape ? 'landscape' : 'portrait',
-          unit: 'pt',
-          format: [ptW, ptH],
-        });
-        pdf.addImage(dataUrl, 'JPEG', 0, 0, ptW, ptH, undefined, 'FAST');
-        pdf.save(`${safeTitle}.pdf`);
+        // pdf-lib embeds the PNG without recompression and sets correct page dimensions.
+        const pngBase64 = dataUrl.split(',')[1];
+        const pngBytes  = Uint8Array.from(atob(pngBase64), c => c.charCodeAt(0));
+
+        const pdfDoc   = await PDFDocument.create();
+        const pdfImage = await pdfDoc.embedPng(pngBytes);
+
+        // Page size in points (1 pt = 1/72 inch).  outW pixels at resOption DPI
+        // → outW/resOption inches → outW/resOption × 72 points.
+        const ptW = (outW / resOption) * 72;
+        const ptH = (outH / resOption) * 72;
+        const page = pdfDoc.addPage([ptW, ptH]);
+        page.drawImage(pdfImage, { x: 0, y: 0, width: ptW, height: ptH });
+
+        const pdfBytes = await pdfDoc.save();
+        const blob = new Blob([pdfBytes as unknown as BlobPart], { type: 'application/pdf' });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href     = url;
+        a.download = `${safeTitle}.pdf`;
+        a.click();
+        URL.revokeObjectURL(url);
       } else {
-        const a = document.createElement('a');
-        a.href = dataUrl;
+        const a    = document.createElement('a');
+        a.href     = dataUrl;
         a.download = `${safeTitle}.${format}`;
         a.click();
       }
@@ -125,14 +151,19 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
       setError((e as Error).message);
       setProgress(null);
     } finally {
+      // Always restore the canvas to its original state.
+      fc_.enableRetinaScaling = savedRetina;
+      fc.setDimensions({ width: savedW, height: savedH });
       fc.setViewportTransform(savedVT);
+      fc.getObjects().forEach(o => { (o as { dirty?: boolean }).dirty = true; });
       fc.renderAll();
       setBusy(false);
     }
   };
 
-  const outW = Math.round(doc.width  * (resOption <= 2 ? resOption : resOption / 96));
-  const outH = Math.round(doc.height * (resOption <= 2 ? resOption : resOption / 96));
+  const dpiScale = resOption / 96;
+  const outW = Math.round(doc.width  * dpiScale);
+  const outH = Math.round(doc.height * dpiScale);
 
   return (
     <div style={{
@@ -199,7 +230,7 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
             {/* Resolution */}
             <div>
               <div className="input-label">Resolution</div>
-              <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: 5 }}>
                 {RESOLUTIONS.map(r => (
                   <button key={r.value}
                     className={`btn btn-ghost${resOption === r.value ? ' active' : ''}`}
@@ -207,7 +238,7 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
                       fontSize: 11, padding: '3px 8px',
                       background: resOption === r.value ? 'var(--accent-glow)' : undefined,
                       borderColor: resOption === r.value ? 'var(--accent)' : undefined,
-                      color:  resOption === r.value ? 'var(--accent)' : undefined,
+                      color:       resOption === r.value ? 'var(--accent)' : undefined,
                     }}
                     onClick={() => setResOption(r.value)}>
                     {r.label}
@@ -215,8 +246,7 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
                 ))}
               </div>
               <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 5 }}>
-                Output: {outW} × {outH} px
-                {doc.dpi !== 96 && ` (document DPI: ${doc.dpi}, using ${resOption <= 2 ? `${resOption}× screen` : `${resOption} DPI`})`}
+                Output: {outW} × {outH} px — {(outW / resOption).toFixed(2)}" × {(outH / resOption).toFixed(2)}"
               </div>
             </div>
 
@@ -239,11 +269,9 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
           <div>
             <div style={{ height: 5, background: 'var(--border)', borderRadius: 3, overflow: 'hidden' }}>
               <div style={{
-                height: '100%',
-                width: `${progress.pct}%`,
+                height: '100%', width: `${progress.pct}%`,
                 background: progress.pct === 100 ? '#3ecf8e' : 'var(--accent)',
-                borderRadius: 3,
-                transition: 'width 0.3s ease',
+                borderRadius: 3, transition: 'width 0.3s ease',
               }} />
             </div>
             <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>

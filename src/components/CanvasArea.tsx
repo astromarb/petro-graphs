@@ -652,47 +652,28 @@ export default function CanvasArea() {
     doc.objects.forEach(obj => {
       if (obj.type !== 'image') return;
       const o = obj as ImageObject;
-      if (!o.showModeTag) {
-        const existing = modeTagMapRef.current.get(obj.id);
-        if (existing) {
-          fc.remove(existing.bg);
-          fc.remove(existing.tag);
-          modeTagMapRef.current.delete(obj.id);
-        }
-        return;
-      }
-      liveTagIds.add(obj.id);
-      const tagText = o.mode;
-      const pad  = 4;
-      const fSize = 11;
-      const tagW  = tagText.length * fSize * 0.65 + pad * 2;
-      const tagH  = fSize + pad * 2;
-      const tp = o.tagPosition ?? 'tl';
+      if (!(o as unknown as Record<string, unknown>)['showModeTag']) return;
+      const tagText = o.mode ?? '';
+      if (!tagText) return;
+      const pad = 4, fSize = 11;
+      const tagW = tagText.length * fSize * 0.65 + pad * 2;
+      const tagH = fSize + pad * 2;
+      const tp = (o as unknown as Record<string, unknown>)['tagPosition'] as string ?? 'tl';
       const tx = tp === 'tl' || tp === 'bl' ? o.x + pad : o.x + o.width  - tagW - pad;
       const ty = tp === 'tl' || tp === 'tr' ? o.y + pad : o.y + o.height - tagH - pad;
-      const existing = modeTagMapRef.current.get(obj.id);
-      if (existing) {
-        existing.bg.set({ left: tx, top: ty, width: tagW, height: tagH });
-        existing.bg.setCoords();
-        existing.tag.set({ left: tx + pad, top: ty + pad, text: tagText });
-        existing.tag.setCoords();
-      } else {
-        const bg = new fabric.Rect({
-          left: tx, top: ty, width: tagW, height: tagH,
-          fill: 'rgba(0,0,0,0.55)',
-          selectable: false, evented: false,
-        });
-        const tag = new fabric.Text(tagText, {
-          left: tx + pad, top: ty + pad,
-          fontSize: fSize, fontWeight: 'bold',
-          fontFamily: 'Inter, system-ui, sans-serif',
-          fill: '#ffffff',
-          selectable: false, evented: false,
-        });
-        fc.add(bg);
-        fc.add(tag);
-        modeTagMapRef.current.set(obj.id, { bg, tag });
-      }
+      const bg = new fabric.Rect({
+        left: tx, top: ty, width: tagW, height: tagH,
+        fill: 'rgba(0,0,0,0.55)', selectable: false, evented: false,
+      });
+      const tag = new fabric.Text(tagText, {
+        left: tx + pad, top: ty + pad,
+        fontSize: fSize, fontWeight: 'bold',
+        fontFamily: 'Inter, system-ui, sans-serif',
+        fill: '#ffffff', selectable: false, evented: false,
+      });
+      fc.add(bg);
+      fc.add(tag);
+      modeTagMapRef.current.set(obj.id, { bg, tag });
     });
     // Remove tags for deleted/hidden objects
     for (const [id, entry] of modeTagMapRef.current) {
