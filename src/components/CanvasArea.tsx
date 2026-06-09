@@ -103,20 +103,22 @@ function RulerOverlay({
   zoom: number;
   dpi: number;
   docSize: number;
-  rulerUnit: 'in' | 'cm';
+  rulerUnit: 'in' | 'cm' | 'mm';
 }) {
   const isH = orientation === 'horizontal';
   const RULER_SIZE = 18;
 
   // Determine tick spacing in real-world units
-  // pxPerUnit = how many doc-pixels per 1 real unit (inch or cm)
+  // pxPerUnit = how many doc-pixels per 1 real unit (inch, cm, or mm)
   const pxPerIn = dpi;
-  const pxPerUnit = rulerUnit === 'in' ? pxPerIn : pxPerIn / 2.54;
+  const pxPerUnit = rulerUnit === 'in' ? pxPerIn : rulerUnit === 'cm' ? pxPerIn / 2.54 : pxPerIn / 25.4;
 
   // Nice tick intervals in real units
   const unitCandidates = rulerUnit === 'in'
     ? [1/16, 1/8, 1/4, 1/2, 1, 2, 3, 6, 12]
-    : [0.1, 0.25, 0.5, 1, 2, 5, 10, 25, 50];
+    : rulerUnit === 'cm'
+    ? [0.1, 0.25, 0.5, 1, 2, 5, 10, 25, 50]
+    : [0.5, 1, 2, 5, 10, 25, 50, 100];
   const minSpacingPx = 40;
   const tickUnit = unitCandidates.find(c => c * pxPerUnit * zoom >= minSpacingPx) ?? unitCandidates[unitCandidates.length - 1];
   const tickDocPx = tickUnit * pxPerUnit;
@@ -286,28 +288,6 @@ export default function CanvasArea() {
         height: (fObj.height ?? 1) * (fObj.scaleY ?? 1),
         rotation: fObj.angle ?? 0,
       });
-    });
-
-    // Keep mode tags tracking their image live during drag (before store commits).
-    fc.on('object:moving', (e) => {
-      const fObj = e.target as fabric.FabricObject & { storeId?: string };
-      if (!fObj?.storeId) return;
-      const entry = modeTagMapRef.current.get(fObj.storeId);
-      if (!entry) return;
-      const pad = 4, fSize = 11;
-      const tagText = entry.tag.text ?? '';
-      const tagW = tagText.length * fSize * 0.65 + pad * 2;
-      const tagH = fSize + pad * 2;
-      const w = (fObj.width ?? 0) * (fObj.scaleX ?? 1);
-      const h = (fObj.height ?? 0) * (fObj.scaleY ?? 1);
-      // Always use tl position during drag (matches store default)
-      const tx = (fObj.left ?? 0) + pad;
-      const ty = (fObj.top  ?? 0) + pad;
-      void h; void w;
-      entry.bg.set({ left: tx, top: ty, width: tagW, height: tagH });
-      entry.bg.setCoords();
-      entry.tag.set({ left: tx + pad, top: ty + pad });
-      entry.tag.setCoords();
     });
 
     // ── mouse:down — start scalebar draw (requires calibrated image) ─────
@@ -668,15 +648,7 @@ export default function CanvasArea() {
     });
 
     // ── Mode tag overlay ──────────────────────────────────────────────
-    // Always remove all existing tags and recreate from store state.
-    // In-place update caused stale references after canvas re-init and
-    // orphaned tags that couldn't be removed (duplicates during drag).
-    for (const entry of modeTagMapRef.current.values()) {
-      fc.remove(entry.bg);
-      fc.remove(entry.tag);
-    }
-    modeTagMapRef.current.clear();
-
+    const liveTagIds = new Set<string>();
     doc.objects.forEach(obj => {
       if (obj.type !== 'image') return;
       const o = obj as ImageObject;
@@ -703,6 +675,14 @@ export default function CanvasArea() {
       fc.add(tag);
       modeTagMapRef.current.set(obj.id, { bg, tag });
     });
+    // Remove tags for deleted/hidden objects
+    for (const [id, entry] of modeTagMapRef.current) {
+      if (!liveTagIds.has(id)) {
+        fc.remove(entry.bg);
+        fc.remove(entry.tag);
+        modeTagMapRef.current.delete(id);
+      }
+    }
 
     fc.renderAll();
   }, [doc.objects, groups, fabricReady]);
@@ -712,7 +692,7 @@ export default function CanvasArea() {
     const fc = fabricRef.current;
     if (!fc) return;
 
-    const liveIds = new Set(insets.map(p => p.id));
+    const liveIds = new Set((insets ?? []).map(p => p.id));
 
     for (const [pid, conn] of connectorMapRef.current) {
       if (!liveIds.has(pid)) {
@@ -805,7 +785,7 @@ export default function CanvasArea() {
       height: Math.round(defaultH),
       rotation: 0, locked: false, visible: true, label: img.name,
       border: { color: '#ffffff', width: 2, style: 'solid', radius: 0 },
-      showModeTag: false, tagPosition: 'tl', opacity: 1,
+      showModeTag: true, tagPosition: 'tl', opacity: 1,
       adjustments: { ...DEFAULT_ADJUSTMENTS },
     });
   }, [addObject]);
@@ -923,7 +903,7 @@ export default function CanvasArea() {
     <div
       ref={wrapRef}
       className="canvas-area canvas-checkerboard"
-      style={{ overflow: 'hidden', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      style={{ overflow: 'hidden', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
       onDrop={onDrop}
       onDragOver={e => { e.preventDefault(); setDropHighlight(true); }}
       onDragLeave={() => setDropHighlight(false)}

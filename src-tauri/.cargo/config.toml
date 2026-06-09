@@ -1,5 +1,4 @@
 [build]
-# Redirect Cargo build artifacts to an NTFS drive so hard-linking works in the
-# incremental compilation cache. The D: drive (FAT32) does not support hard
-# links, which caused spurious warnings on every build.
-target-dir = "C:\\petro-graphs-target"
+# Keep a repo-local target dir so CI and cross-platform builds don't inherit
+# machine-specific absolute paths.
+target-dir = "target"

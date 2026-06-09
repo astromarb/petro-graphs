@@ -370,8 +370,8 @@ describe('project persistence helpers', () => {
     const { rehydrate } = useStore.getState();
     const restoredDoc = { ...useStore.getState().doc, title: 'Restored Project' };
     rehydrate({
-      pages: [{ doc: restoredDoc, insets: [] }],
-      activePageId: restoredDoc.id,
+      doc: restoredDoc,
+      insets: [],
       groups: [{ id: 'g1', name: 'Sample A', sample: '', images: [], expanded: true }],
     });
     expect(useStore.getState().doc.title).toBe('Restored Project');
@@ -384,11 +384,34 @@ describe('project persistence helpers', () => {
     const { rehydrate } = useStore.getState();
     const docWithObj = { ...useStore.getState().doc, objects: [obj] };
     rehydrate({
-      pages: [{ doc: docWithObj, insets: [] }],
-      activePageId: docWithObj.id,
+      doc: docWithObj,
+      insets: [],
       groups: [],
     });
     expect(useStore.getState().doc.objects).toHaveLength(1);
     expect(useStore.getState().doc.objects[0].id).toBe(obj.id);
+  });
+
+  it('rehydrate with saved doc missing objects field leaves objects as []', () => {
+    // Older .petrofig files may not include doc.objects — Object.assign would
+    // overwrite the field with undefined, causing .map() crashes in CanvasArea.
+    const { rehydrate } = useStore.getState();
+    const docWithoutObjects = { ...useStore.getState().doc } as Record<string, unknown>;
+    delete docWithoutObjects['objects'];
+    rehydrate({ doc: docWithoutObjects as never, insets: [], groups: [] });
+    expect(Array.isArray(useStore.getState().doc.objects)).toBe(true);
+    expect(useStore.getState().doc.objects).toHaveLength(0);
+  });
+
+  it('rehydrate with undefined groups leaves groups as []', () => {
+    const { rehydrate } = useStore.getState();
+    rehydrate({ doc: useStore.getState().doc, insets: [], groups: undefined as never });
+    expect(Array.isArray(useStore.getState().groups)).toBe(true);
+  });
+
+  it('rehydrate with undefined insets leaves insets as []', () => {
+    const { rehydrate } = useStore.getState();
+    rehydrate({ doc: useStore.getState().doc, insets: undefined as never, groups: [] });
+    expect(Array.isArray(useStore.getState().insets)).toBe(true);
   });
 });

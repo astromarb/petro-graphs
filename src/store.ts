@@ -124,7 +124,6 @@ export interface AppState {
 
   // Canvas objects
   addObject:       (obj: CanvasObject) => void;
-  addObjects:      (objs: CanvasObject[]) => void;
   updateObject:    (id: string, patch: Partial<CanvasObject>) => void;
   removeObject:    (id: string) => void;
   reorderObjects:  (ids: string[]) => void;
@@ -164,7 +163,8 @@ export interface AppState {
   toggleLayersPanel:    () => void;
   showRulers:           boolean;
   toggleRulers:         () => void;
-  rulerUnit:            'in' | 'cm';
+  rulerUnit:            'in' | 'cm' | 'mm';
+  setRulerUnit:         (unit: 'in' | 'cm' | 'mm') => void;
   toggleRulerUnit:      () => void;
 
   /** Restore state from IndexedDB on app startup */
@@ -174,6 +174,13 @@ export interface AppState {
   savedVersion:     number;
   markSaved:        () => void;
   hasUnsavedChanges: () => boolean;
+
+  /** Path of the currently open .petro file (desktop only) */
+  currentFilePath:    string | null;
+  setCurrentFilePath: (path: string | null) => void;
+
+  /** Swap canvas width ↔ height and reposition all objects proportionally */
+  flipOrientation: () => void;
 }
 
 const defaultDoc: CanvasDoc = {
@@ -209,8 +216,10 @@ export const useStore = create<AppState>()(
     rehydrate: (saved) => set((s) => {
       // Merge doc to preserve any new fields added since the file was saved
       Object.assign(s.doc, saved.doc);
-      s.groups = saved.groups as typeof s.groups;
-      s.insets = saved.insets as typeof s.insets;
+      // Guard against older file formats that may omit these arrays
+      if (!Array.isArray(s.doc.objects)) s.doc.objects = [];
+      s.groups = (saved.groups ?? []) as typeof s.groups;
+      s.insets  = (saved.insets  ?? []) as typeof s.insets;
     }),
 
     // ── Library ──────────────────────────────────────────────────────────
@@ -275,12 +284,6 @@ export const useStore = create<AppState>()(
     addObject: (obj) => set((s) => {
       pushHistory(s);
       s.doc.objects.push(obj);
-      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
-    }),
-    addObjects: (objs) => set((s) => {
-      if (objs.length === 0) return;
-      pushHistory(s);
-      for (const obj of objs) s.doc.objects.push(obj);
       persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
     updateObject: (id, patch) => set((s) => {
@@ -382,8 +385,11 @@ export const useStore = create<AppState>()(
     toggleLayersPanel: () => set((s) => { s.showLayersPanel = !s.showLayersPanel; }),
     showRulers: false,
     toggleRulers: () => set((s) => { s.showRulers = !s.showRulers; }),
-    rulerUnit: 'in' as 'in' | 'cm',
-    toggleRulerUnit: () => set((s) => { s.rulerUnit = s.rulerUnit === 'in' ? 'cm' : 'in'; }),
+    rulerUnit: 'mm' as 'in' | 'cm' | 'mm',
+    setRulerUnit: (unit) => set((s) => { s.rulerUnit = unit; }),
+    toggleRulerUnit: () => set((s) => {
+      s.rulerUnit = s.rulerUnit === 'in' ? 'cm' : s.rulerUnit === 'cm' ? 'mm' : 'in';
+    }),
 
     savedVersion: 0,
     markSaved: () => set((s) => { s.savedVersion = s.past.length; }),
@@ -391,5 +397,24 @@ export const useStore = create<AppState>()(
       const s = useStore.getState();
       return s.past.length !== s.savedVersion || s.doc.objects.length > 0 || s.groups.length > 0;
     },
+
+    currentFilePath: null,
+    setCurrentFilePath: (path) => set((s) => { s.currentFilePath = path; }),
+
+    flipOrientation: () => set((s) => {
+      const oldW = s.doc.width;
+      const oldH = s.doc.height;
+      s.doc.width  = oldH;
+      s.doc.height = oldW;
+      const s1 = Math.min(oldH / oldW, oldW / oldH);
+      s.doc.objects.forEach(obj => {
+        obj.x      = Math.round(obj.x      * (oldH / oldW));
+        obj.y      = Math.round(obj.y      * (oldW / oldH));
+        obj.width  = Math.round(obj.width  * s1);
+        obj.height = Math.round(obj.height * s1);
+        if (obj.type === 'scalebar') obj.length = Math.round(obj.length * s1);
+      });
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
+    }),
   }))
 );
