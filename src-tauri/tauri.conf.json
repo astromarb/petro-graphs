@@ -27,6 +27,18 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "RWSe4jjRqY7xChqznlHkpkyYTSgqoj2iukmWTik2Pfk+//Dehl7TdeF",
+      "endpoints": [
+        "https://github.com/astromarb/petro-graphs/releases/latest/download/latest.json"
+      ],
+      "dialog": true,
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",
