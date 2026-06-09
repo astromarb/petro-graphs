@@ -2,9 +2,7 @@
 
 A desktop application for composing, editing, and exporting high-quality scientific figures. 
 
-Built with React, TypeScript, Fabric.js, and Tauri.
 ---
-
 ## Running as a Desktop App
 
 Petro Graphs is a native desktop application built with [Tauri](https://tauri.app). You do **not** need a browser or web server to run it.
