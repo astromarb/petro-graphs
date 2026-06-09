@@ -709,7 +709,7 @@ export default function CanvasArea() {
     const fc = fabricRef.current;
     if (!fc) return;
 
-    const liveIds = new Set(insets.map(p => p.id));
+    const liveIds = new Set((insets ?? []).map(p => p.id));
 
     for (const [pid, conn] of connectorMapRef.current) {
       if (!liveIds.has(pid)) {

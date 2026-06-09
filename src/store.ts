@@ -208,8 +208,10 @@ export const useStore = create<AppState>()(
     rehydrate: (saved) => set((s) => {
       // Merge doc to preserve any new fields added since the file was saved
       Object.assign(s.doc, saved.doc);
-      s.groups = saved.groups as typeof s.groups;
-      s.insets = saved.insets as typeof s.insets;
+      // Guard against older file formats that may omit these arrays
+      if (!Array.isArray(s.doc.objects)) s.doc.objects = [];
+      s.groups = (saved.groups ?? []) as typeof s.groups;
+      s.insets  = (saved.insets  ?? []) as typeof s.insets;
     }),
 
     // ── Library ──────────────────────────────────────────────────────────
