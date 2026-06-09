@@ -370,8 +370,8 @@ describe('project persistence helpers', () => {
     const { rehydrate } = useStore.getState();
     const restoredDoc = { ...useStore.getState().doc, title: 'Restored Project' };
     rehydrate({
-      pages: [{ doc: restoredDoc, insets: [] }],
-      activePageId: restoredDoc.id,
+      doc: restoredDoc,
+      insets: [],
       groups: [{ id: 'g1', name: 'Sample A', sample: '', images: [], expanded: true }],
     });
     expect(useStore.getState().doc.title).toBe('Restored Project');
@@ -384,8 +384,8 @@ describe('project persistence helpers', () => {
     const { rehydrate } = useStore.getState();
     const docWithObj = { ...useStore.getState().doc, objects: [obj] };
     rehydrate({
-      pages: [{ doc: docWithObj, insets: [] }],
-      activePageId: docWithObj.id,
+      doc: docWithObj,
+      insets: [],
       groups: [],
     });
     expect(useStore.getState().doc.objects).toHaveLength(1);
