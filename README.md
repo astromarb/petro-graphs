@@ -1,12 +1,11 @@
-# Petro Graphs - Open-Source Scientific Figure Editor
+# Petro Graphs 
 
-A desktop application for composing, editing, and exporting high-quality scientific figures. 
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/9174005e-ed75-4cf5-921e-c19df49b3248" />
 
 ---
 ## Running as a Desktop App
 
 Petro Graphs is a native desktop application built with [Tauri](https://tauri.app). You do **not** need a browser or web server to run it.
-
 
 ## Tech Stack
 | Layer | Technology |
