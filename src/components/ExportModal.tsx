@@ -52,62 +52,36 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
     setError('');
     setExportDone(false);
 
-    const outW = Math.round(doc.width  * (resOption <= 2 ? resOption : resOption / 96));
-    const outH = Math.round(doc.height * (resOption <= 2 ? resOption : resOption / 96));
+    const dpiScale = resOption / 96;
+    const outW = Math.round(doc.width  * dpiScale);
+    const outH = Math.round(doc.height * dpiScale);
 
-    // Strategy: capture lowerCanvasEl directly — this bypasses Fabric's internal
-    // toDataURL/toCanvasElement which breaks when objects use cached rendering
-    // (clipPaths, filters, etc.) at a different zoom than the export resolution.
-    //
-    // Approach:
-    //   1. Zero out pan (keep zoom) so the doc origin is at canvas pixel (0,0)
-    //   2. renderAll() on the live canvas — same path the user sees, always correct
-    //   3. drawImage() from lowerCanvasEl → offscreen canvas at outW×outH
-    //   4. Restore viewport
-    const currentZoom = fc.getZoom();
-    const savedVT = [...(fc.viewportTransform ?? [1,0,0,1,0,0])] as [number,number,number,number,number,number];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fc_ = fc as any;
+    const savedW      = fc.getWidth();
+    const savedH      = fc.getHeight();
+    const savedVT     = [...(fc.viewportTransform ?? [1,0,0,1,0,0])] as [number,number,number,number,number,number];
+    const savedRetina = fc_.enableRetinaScaling as boolean;
 
     try {
       setProgress({ phase: 'Preparing canvas…', pct: 10 });
       await new Promise<void>(r => setTimeout(r, 16));
 
-      // Disable retina scaling so lowerCanvasEl pixel buffer = CSS size exactly.
-      // (With retina on, pixel buffer = outW × devicePixelRatio which can exceed
-      //  browser canvas limits at 600 DPI and cause a blank result.)
       fc_.enableRetinaScaling = false;
-
-      // Resize Fabric canvas to the full export resolution and set zoom to fill it.
-      // This renders every object at native export resolution — no upscaling.
       const exportZoom = outW / doc.width;
       fc.setDimensions({ width: outW, height: outH });
-
-      // Mark all objects dirty so cached clipPath renders are regenerated at the new zoom.
       fc.getObjects().forEach(o => { (o as { dirty?: boolean }).dirty = true; });
-
       fc.setViewportTransform([exportZoom, 0, 0, exportZoom, 0, 0]);
       fc.renderAll();
 
       setProgress({ phase: 'Encoding image…', pct: 50 });
       await new Promise<void>(r => setTimeout(r, 16));
 
-      // Capture at 1:1 — no scaling needed since canvas is already at outW×outH.
       const src = fc_.lowerCanvasEl as HTMLCanvasElement;
-
       let dataUrl: string;
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const src = (fc as any).lowerCanvasEl as HTMLCanvasElement;
-        const dst = document.createElement('canvas');
-        dst.width  = outW;
-        dst.height = outH;
-        const ctx = dst.getContext('2d')!;
-        ctx.drawImage(src, 0, 0, outW, outH);
-        const mime = format === 'pdf' ? 'image/jpeg' : `image/${format}`;
-        const q    = format === 'pdf' ? 0.92 : quality;
-        dataUrl = dst.toDataURL(mime, q);
-      } catch (e) {
-        throw new Error(`Canvas export failed: ${(e as Error).message}`);
-      }
+      if (format === 'pdf') { dataUrl = src.toDataURL('image/png'); }
+      else if (format === 'jpeg') { dataUrl = src.toDataURL('image/jpeg', quality); }
+      else { dataUrl = src.toDataURL('image/png'); }
 
       setProgress({ phase: 'Saving file…', pct: 80 });
       await new Promise<void>(r => setTimeout(r, 16));
@@ -151,7 +125,6 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
       setError((e as Error).message);
       setProgress(null);
     } finally {
-      // Always restore the canvas to its original state.
       fc_.enableRetinaScaling = savedRetina;
       fc.setDimensions({ width: savedW, height: savedH });
       fc.setViewportTransform(savedVT);
@@ -161,9 +134,9 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
     }
   };
 
-  const dpiScale = resOption / 96;
-  const outW = Math.round(doc.width  * dpiScale);
-  const outH = Math.round(doc.height * dpiScale);
+  const previewDpiScale = resOption / 96;
+  const outW = Math.round(doc.width  * previewDpiScale);
+  const outH = Math.round(doc.height * previewDpiScale);
 
   return (
     <div style={{

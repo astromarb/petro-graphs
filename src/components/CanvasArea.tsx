@@ -103,7 +103,7 @@ function RulerOverlay({
   zoom: number;
   dpi: number;
   docSize: number;
-  rulerUnit: 'in' | 'cm';
+  rulerUnit: 'in' | 'cm' | 'mm';
 }) {
   const isH = orientation === 'horizontal';
   const RULER_SIZE = 18;
