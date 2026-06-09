@@ -7,16 +7,8 @@ export function isDesktop(): boolean {
 
 /** Snapshot the current store into a PersistedState. */
 function snapshot(): PersistedState {
-  const s = useStore.getState();
-  return {
-    pages: (s.pages as PersistedState['pages']).map(p =>
-      p.doc.id === s.activePageId
-        ? { doc: s.doc as PersistedState['pages'][0]['doc'], insets: s.insets as PersistedState['pages'][0]['insets'] }
-        : p
-    ),
-    activePageId: s.activePageId,
-    groups: s.groups as PersistedState['groups'],
-  };
+  const { doc, groups, insets } = useStore.getState();
+  return { doc, groups, insets };
 }
 
 /** Write the project to a specific path (must already be allowed by the user via dialog). */

@@ -173,6 +173,13 @@ export interface AppState {
   savedVersion:     number;
   markSaved:        () => void;
   hasUnsavedChanges: () => boolean;
+
+  /** Path of the currently open .petro file (desktop only) */
+  currentFilePath:    string | null;
+  setCurrentFilePath: (path: string | null) => void;
+
+  /** Swap canvas width ↔ height and reposition all objects proportionally */
+  flipOrientation: () => void;
 }
 
 const defaultDoc: CanvasDoc = {
@@ -386,5 +393,24 @@ export const useStore = create<AppState>()(
       const s = useStore.getState();
       return s.past.length !== s.savedVersion || s.doc.objects.length > 0 || s.groups.length > 0;
     },
+
+    currentFilePath: null,
+    setCurrentFilePath: (path) => set((s) => { s.currentFilePath = path; }),
+
+    flipOrientation: () => set((s) => {
+      const oldW = s.doc.width;
+      const oldH = s.doc.height;
+      s.doc.width  = oldH;
+      s.doc.height = oldW;
+      const s1 = Math.min(oldH / oldW, oldW / oldH);
+      s.doc.objects.forEach(obj => {
+        obj.x      = Math.round(obj.x      * (oldH / oldW));
+        obj.y      = Math.round(obj.y      * (oldW / oldH));
+        obj.width  = Math.round(obj.width  * s1);
+        obj.height = Math.round(obj.height * s1);
+        if (obj.type === 'scalebar') obj.length = Math.round(obj.length * s1);
+      });
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
+    }),
   }))
 );
