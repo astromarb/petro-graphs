@@ -124,6 +124,7 @@ export interface AppState {
 
   // Canvas objects
   addObject:       (obj: CanvasObject) => void;
+  addObjects:      (objs: CanvasObject[]) => void;
   updateObject:    (id: string, patch: Partial<CanvasObject>) => void;
   removeObject:    (id: string) => void;
   reorderObjects:  (ids: string[]) => void;
@@ -274,6 +275,12 @@ export const useStore = create<AppState>()(
     addObject: (obj) => set((s) => {
       pushHistory(s);
       s.doc.objects.push(obj);
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
+    }),
+    addObjects: (objs) => set((s) => {
+      if (objs.length === 0) return;
+      pushHistory(s);
+      for (const obj of objs) s.doc.objects.push(obj);
       persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
     updateObject: (id, patch) => set((s) => {

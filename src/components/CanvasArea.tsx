@@ -288,6 +288,28 @@ export default function CanvasArea() {
       });
     });
 
+    // Keep mode tags tracking their image live during drag (before store commits).
+    fc.on('object:moving', (e) => {
+      const fObj = e.target as fabric.FabricObject & { storeId?: string };
+      if (!fObj?.storeId) return;
+      const entry = modeTagMapRef.current.get(fObj.storeId);
+      if (!entry) return;
+      const pad = 4, fSize = 11;
+      const tagText = entry.tag.text ?? '';
+      const tagW = tagText.length * fSize * 0.65 + pad * 2;
+      const tagH = fSize + pad * 2;
+      const w = (fObj.width ?? 0) * (fObj.scaleX ?? 1);
+      const h = (fObj.height ?? 0) * (fObj.scaleY ?? 1);
+      // Always use tl position during drag (matches store default)
+      const tx = (fObj.left ?? 0) + pad;
+      const ty = (fObj.top  ?? 0) + pad;
+      void h; void w;
+      entry.bg.set({ left: tx, top: ty, width: tagW, height: tagH });
+      entry.bg.setCoords();
+      entry.tag.set({ left: tx + pad, top: ty + pad });
+      entry.tag.setCoords();
+    });
+
     // ── mouse:down — start scalebar draw (requires calibrated image) ─────
     fc.on('mouse:down', (options) => {
       if (toolRef.current !== 'scalebar') return;
@@ -646,60 +668,41 @@ export default function CanvasArea() {
     });
 
     // ── Mode tag overlay ──────────────────────────────────────────────
-    const liveTagIds = new Set<string>();
+    // Always remove all existing tags and recreate from store state.
+    // In-place update caused stale references after canvas re-init and
+    // orphaned tags that couldn't be removed (duplicates during drag).
+    for (const entry of modeTagMapRef.current.values()) {
+      fc.remove(entry.bg);
+      fc.remove(entry.tag);
+    }
+    modeTagMapRef.current.clear();
+
     doc.objects.forEach(obj => {
       if (obj.type !== 'image') return;
       const o = obj as ImageObject;
-      if (!o.showModeTag) {
-        const existing = modeTagMapRef.current.get(obj.id);
-        if (existing) {
-          fc.remove(existing.bg);
-          fc.remove(existing.tag);
-          modeTagMapRef.current.delete(obj.id);
-        }
-        return;
-      }
-      liveTagIds.add(obj.id);
-      const tagText = o.mode;
-      const pad  = 4;
-      const fSize = 11;
-      const tagW  = tagText.length * fSize * 0.65 + pad * 2;
-      const tagH  = fSize + pad * 2;
-      const tp = o.tagPosition ?? 'tl';
+      if (!(o as unknown as Record<string, unknown>)['showModeTag']) return;
+      const tagText = o.mode ?? '';
+      if (!tagText) return;
+      const pad = 4, fSize = 11;
+      const tagW = tagText.length * fSize * 0.65 + pad * 2;
+      const tagH = fSize + pad * 2;
+      const tp = (o as unknown as Record<string, unknown>)['tagPosition'] as string ?? 'tl';
       const tx = tp === 'tl' || tp === 'bl' ? o.x + pad : o.x + o.width  - tagW - pad;
       const ty = tp === 'tl' || tp === 'tr' ? o.y + pad : o.y + o.height - tagH - pad;
-      const existing = modeTagMapRef.current.get(obj.id);
-      if (existing) {
-        existing.bg.set({ left: tx, top: ty, width: tagW, height: tagH });
-        existing.bg.setCoords();
-        existing.tag.set({ left: tx + pad, top: ty + pad, text: tagText });
-        existing.tag.setCoords();
-      } else {
-        const bg = new fabric.Rect({
-          left: tx, top: ty, width: tagW, height: tagH,
-          fill: 'rgba(0,0,0,0.55)',
-          selectable: false, evented: false,
-        });
-        const tag = new fabric.Text(tagText, {
-          left: tx + pad, top: ty + pad,
-          fontSize: fSize, fontWeight: 'bold',
-          fontFamily: 'Inter, system-ui, sans-serif',
-          fill: '#ffffff',
-          selectable: false, evented: false,
-        });
-        fc.add(bg);
-        fc.add(tag);
-        modeTagMapRef.current.set(obj.id, { bg, tag });
-      }
+      const bg = new fabric.Rect({
+        left: tx, top: ty, width: tagW, height: tagH,
+        fill: 'rgba(0,0,0,0.55)', selectable: false, evented: false,
+      });
+      const tag = new fabric.Text(tagText, {
+        left: tx + pad, top: ty + pad,
+        fontSize: fSize, fontWeight: 'bold',
+        fontFamily: 'Inter, system-ui, sans-serif',
+        fill: '#ffffff', selectable: false, evented: false,
+      });
+      fc.add(bg);
+      fc.add(tag);
+      modeTagMapRef.current.set(obj.id, { bg, tag });
     });
-    // Remove tags for deleted/hidden objects
-    for (const [id, entry] of modeTagMapRef.current) {
-      if (!liveTagIds.has(id)) {
-        fc.remove(entry.bg);
-        fc.remove(entry.tag);
-        modeTagMapRef.current.delete(id);
-      }
-    }
 
     fc.renderAll();
   }, [doc.objects, groups, fabricReady]);
@@ -802,7 +805,7 @@ export default function CanvasArea() {
       height: Math.round(defaultH),
       rotation: 0, locked: false, visible: true, label: img.name,
       border: { color: '#ffffff', width: 2, style: 'solid', radius: 0 },
-      showModeTag: true, tagPosition: 'tl', opacity: 1,
+      showModeTag: false, tagPosition: 'tl', opacity: 1,
       adjustments: { ...DEFAULT_ADJUSTMENTS },
     });
   }, [addObject]);
