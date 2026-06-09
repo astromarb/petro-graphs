@@ -1,6 +1,6 @@
 # Petro Graphs 
 
-<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/9174005e-ed75-4cf5-921e-c19df49b3248" />
+<<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/e1119134-ed67-4d11-9ed1-887ca87abce2" />
 
 ---
 ## Running as a Desktop App
