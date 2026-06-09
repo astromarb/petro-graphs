@@ -81,6 +81,18 @@ export default function App() {
         removeObject(selectedId);
       }
 
+      // Arrow key nudge — 1 px normally, 10 px with Shift
+      if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key) && selectedId) {
+        e.preventDefault();
+        const step = e.shiftKey ? 10 : 1;
+        const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
+        const dy = e.key === 'ArrowUp'   ? -step : e.key === 'ArrowDown'  ? step : 0;
+        const { doc: d, updateObject: uo } = useStore.getState();
+        const o = d.objects.find(ob => ob.id === selectedId);
+        if (o) uo(selectedId, { x: o.x + dx, y: o.y + dy });
+        return;
+      }
+
       if ((e.ctrlKey || e.metaKey) && e.key === 'd' && selectedId) {
         e.preventDefault();
         duplicateObject(selectedId);

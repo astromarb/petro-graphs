@@ -103,22 +103,20 @@ function RulerOverlay({
   zoom: number;
   dpi: number;
   docSize: number;
-  rulerUnit: 'in' | 'cm' | 'mm';
+  rulerUnit: 'in' | 'cm';
 }) {
   const isH = orientation === 'horizontal';
   const RULER_SIZE = 18;
 
   // Determine tick spacing in real-world units
-  // pxPerUnit = how many doc-pixels per 1 real unit (inch, cm, or mm)
+  // pxPerUnit = how many doc-pixels per 1 real unit (inch or cm)
   const pxPerIn = dpi;
-  const pxPerUnit = rulerUnit === 'in' ? pxPerIn : rulerUnit === 'cm' ? pxPerIn / 2.54 : pxPerIn / 25.4;
+  const pxPerUnit = rulerUnit === 'in' ? pxPerIn : pxPerIn / 2.54;
 
   // Nice tick intervals in real units
   const unitCandidates = rulerUnit === 'in'
     ? [1/16, 1/8, 1/4, 1/2, 1, 2, 3, 6, 12]
-    : rulerUnit === 'cm'
-    ? [0.1, 0.25, 0.5, 1, 2, 5, 10, 25, 50]
-    : [0.5, 1, 2, 5, 10, 25, 50, 100];
+    : [0.1, 0.25, 0.5, 1, 2, 5, 10, 25, 50];
   const minSpacingPx = 40;
   const tickUnit = unitCandidates.find(c => c * pxPerUnit * zoom >= minSpacingPx) ?? unitCandidates[unitCandidates.length - 1];
   const tickDocPx = tickUnit * pxPerUnit;
@@ -254,6 +252,9 @@ export default function CanvasArea() {
 
   // Used to trigger the sync effect after canvas init completes
   const [fabricReady, setFabricReady] = useState(false);
+  // Smart guide lines shown during drag: screen-pixel coordinates relative to canvas div
+  const [guides, setGuides] = useState<{ type: 'v' | 'h'; pos: number }[]>([]);
+  const setGuidesRef = useRef(setGuides);
 
   // ── Initialize Fabric canvas (once) ──────────────────────────────────
   useEffect(() => {
@@ -278,6 +279,7 @@ export default function CanvasArea() {
     fc.on('selection:cleared', () => setSelectedIdRef.current(null));
 
     fc.on('object:modified', (e) => {
+      setGuidesRef.current([]);
       const fObj = e.target as fabric.FabricObject & { storeId?: string };
       if (!fObj?.storeId) return;
       if (fObj === cropRectRef.current) return;
@@ -288,6 +290,92 @@ export default function CanvasArea() {
         height: (fObj.height ?? 1) * (fObj.scaleY ?? 1),
         rotation: fObj.angle ?? 0,
       });
+    });
+
+    // Keep mode tags tracking their image live during drag (before store commits).
+    // Also compute smart alignment guides.
+    fc.on('object:moving', (e) => {
+      const fObj = e.target as fabric.FabricObject & { storeId?: string };
+      if (!fObj?.storeId) return;
+
+      // ── Mode tag live update ──────────────────────────────────────────
+      const entry = modeTagMapRef.current.get(fObj.storeId);
+      if (entry) {
+        const pad = 4, fSize = 11;
+        const tagText = entry.tag.text ?? '';
+        const tagW = tagText.length * fSize * 0.65 + pad * 2;
+        const tagH = fSize + pad * 2;
+        const tx = (fObj.left ?? 0) + pad;
+        const ty = (fObj.top  ?? 0) + pad;
+        void tagH;
+        entry.bg.set({ left: tx, top: ty, width: tagW });
+        entry.bg.setCoords();
+        entry.tag.set({ left: tx + pad, top: ty + pad });
+        entry.tag.setCoords();
+      }
+
+      // ── Smart guides ─────────────────────────────────────────────────
+      const { doc: sd } = useStore.getState();
+      const vt   = fc.viewportTransform ?? [1,0,0,1,0,0];
+      const zoom = vt[0];
+      const panX = vt[4];
+      const panY = vt[5];
+
+      // Moving object bounds in doc pixels
+      const mL = fObj.left  ?? 0;
+      const mT = fObj.top   ?? 0;
+      const mW = (fObj.width  ?? 0) * (fObj.scaleX ?? 1);
+      const mH = (fObj.height ?? 0) * (fObj.scaleY ?? 1);
+      const mR  = mL + mW;
+      const mMX = mL + mW / 2;
+      const mB  = mT + mH;
+      const mMY = mT + mH / 2;
+      const movingEdgesX = [mL, mMX, mR];
+      const movingEdgesY = [mT, mMY, mB];
+
+      // Reference snap points: canvas edges + other objects
+      const refX = new Set<number>([0, sd.width / 2, sd.width]);
+      const refY = new Set<number>([0, sd.height / 2, sd.height]);
+      sd.objects.forEach(o => {
+        if (o.id === fObj.storeId) return;
+        refX.add(o.x); refX.add(o.x + o.width / 2); refX.add(o.x + o.width);
+        refY.add(o.y); refY.add(o.y + o.height / 2); refY.add(o.y + o.height);
+      });
+
+      const SNAP_THRESH = 6 / zoom; // 6 screen px → doc px
+      const activeGuides: { type: 'v' | 'h'; pos: number }[] = [];
+
+      // Snap and record guides on X axis
+      let snappedX = false;
+      outer_x: for (const ref of refX) {
+        for (let ei = 0; ei < movingEdgesX.length; ei++) {
+          const diff = movingEdgesX[ei] - ref;
+          if (Math.abs(diff) <= SNAP_THRESH) {
+            fObj.set({ left: mL - diff });
+            activeGuides.push({ type: 'v', pos: Math.round(ref * zoom + panX) });
+            snappedX = true;
+            break outer_x;
+          }
+        }
+      }
+      void snappedX;
+
+      // Snap and record guides on Y axis
+      let snappedY = false;
+      outer_y: for (const ref of refY) {
+        for (let ei = 0; ei < movingEdgesY.length; ei++) {
+          const diff = movingEdgesY[ei] - ref;
+          if (Math.abs(diff) <= SNAP_THRESH) {
+            fObj.set({ top: mT - diff });
+            activeGuides.push({ type: 'h', pos: Math.round(ref * zoom + panY) });
+            snappedY = true;
+            break outer_y;
+          }
+        }
+      }
+      void snappedY;
+
+      setGuidesRef.current(activeGuides);
     });
 
     // ── mouse:down — start scalebar draw (requires calibrated image) ─────
@@ -648,7 +736,15 @@ export default function CanvasArea() {
     });
 
     // ── Mode tag overlay ──────────────────────────────────────────────
-    const liveTagIds = new Set<string>();
+    // Always remove all existing tags and recreate from store state.
+    // In-place update caused stale references after canvas re-init and
+    // orphaned tags that couldn't be removed (duplicates during drag).
+    for (const entry of modeTagMapRef.current.values()) {
+      fc.remove(entry.bg);
+      fc.remove(entry.tag);
+    }
+    modeTagMapRef.current.clear();
+
     doc.objects.forEach(obj => {
       if (obj.type !== 'image') return;
       const o = obj as ImageObject;
@@ -675,14 +771,6 @@ export default function CanvasArea() {
       fc.add(tag);
       modeTagMapRef.current.set(obj.id, { bg, tag });
     });
-    // Remove tags for deleted/hidden objects
-    for (const [id, entry] of modeTagMapRef.current) {
-      if (!liveTagIds.has(id)) {
-        fc.remove(entry.bg);
-        fc.remove(entry.tag);
-        modeTagMapRef.current.delete(id);
-      }
-    }
 
     fc.renderAll();
   }, [doc.objects, groups, fabricReady]);
@@ -692,7 +780,7 @@ export default function CanvasArea() {
     const fc = fabricRef.current;
     if (!fc) return;
 
-    const liveIds = new Set((insets ?? []).map(p => p.id));
+    const liveIds = new Set(insets.map(p => p.id));
 
     for (const [pid, conn] of connectorMapRef.current) {
       if (!liveIds.has(pid)) {
@@ -785,7 +873,7 @@ export default function CanvasArea() {
       height: Math.round(defaultH),
       rotation: 0, locked: false, visible: true, label: img.name,
       border: { color: '#ffffff', width: 2, style: 'solid', radius: 0 },
-      showModeTag: true, tagPosition: 'tl', opacity: 1,
+      showModeTag: false, tagPosition: 'tl', opacity: 1,
       adjustments: { ...DEFAULT_ADJUSTMENTS },
     });
   }, [addObject]);
@@ -903,7 +991,7 @@ export default function CanvasArea() {
     <div
       ref={wrapRef}
       className="canvas-area canvas-checkerboard"
-      style={{ overflow: 'hidden', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
+      style={{ overflow: 'hidden', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
       onDrop={onDrop}
       onDragOver={e => { e.preventDefault(); setDropHighlight(true); }}
       onDragLeave={() => setDropHighlight(false)}
@@ -986,6 +1074,17 @@ export default function CanvasArea() {
         outline: '1px solid rgba(255,255,255,0.06)',
       }}>
         <canvas ref={canvasElRef} />
+
+        {/* Smart alignment guides */}
+        {guides.map((g, i) => (
+          <div key={i} style={{
+            position: 'absolute', pointerEvents: 'none', zIndex: 12,
+            background: '#e040fb',
+            ...(g.type === 'v'
+              ? { left: g.pos, top: 0, width: 1, height: '100%' }
+              : { top: g.pos, left: 0, height: 1, width: '100%' }),
+          }} />
+        ))}
 
         {/* Rulers */}
         {showRulers && (
