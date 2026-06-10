@@ -10,6 +10,14 @@ import { nanoid, niceScaleBar, UNIT_METERS } from '../utils';
 import { renderLatexToFabricImage, renderLatexToDataUrl } from '../latexRenderer';
 import { sharedFabricRef } from '../fabricRef';
 
+// Fabric v7 changed the default object origin from left/top to center/center.
+// The entire app's coordinate model (store x/y, hit-testing, drop placement,
+// rulers, export) treats left/top as the object's top-left corner, so restore
+// the v6 defaults globally. Objects that genuinely need center origin set it
+// explicitly at creation time, which overrides these defaults.
+fabric.FabricObject.ownDefaults.originX = 'left';
+fabric.FabricObject.ownDefaults.originY = 'top';
+
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 function borderToDash(style: BorderStyle['style'], w: number): number[] {
@@ -308,6 +316,7 @@ export default function CanvasArea() {
 
       fabricRef.current = fc;
       sharedFabricRef.current = fc;
+      if (import.meta.env.DEV) (window as unknown as { __fc?: fabric.Canvas }).__fc = fc;
   
       // Document background rect — the white page within the larger canvas.
       // Canvas background is transparent so the CSS checkerboard shows through
