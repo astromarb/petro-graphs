@@ -19,8 +19,7 @@
 
 > Built with Tauri 2, Rust, React 19, TypeScript, and Fabric.js 7.
 ---
-
-https://github.com/astromarb/petro-graphs/blob/main/docs/hero.png?raw=true<img width="1336" height="824" alt="image" src="https://github.com/user-attachments/assets/058b47de-6084-4cf9-aacc-047af4665c56" />
+<img width="1336" height="824" alt="image" src="https://github.com/user-attachments/assets/058b47de-6084-4cf9-aacc-047af4665c56" />
 
 
 ---
