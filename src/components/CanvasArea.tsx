@@ -113,11 +113,15 @@ function RulerOverlay({
   // Determine tick spacing in real-world units
   // pxPerUnit = how many doc-pixels per 1 real unit (inch or cm)
   const pxPerIn = dpi;
-  const pxPerUnit = rulerUnit === 'in' ? pxPerIn : pxPerIn / 2.54;
+  const pxPerUnit = rulerUnit === 'in' ? pxPerIn
+    : rulerUnit === 'mm'               ? pxPerIn / 25.4
+    :                                    pxPerIn / 2.54;  // cm
 
   // Nice tick intervals in real units
   const unitCandidates = rulerUnit === 'in'
     ? [1/16, 1/8, 1/4, 1/2, 1, 2, 3, 6, 12]
+    : rulerUnit === 'mm'
+    ? [0.5, 1, 2, 5, 10, 25, 50, 100, 250]
     : [0.1, 0.25, 0.5, 1, 2, 5, 10, 25, 50];
   const minSpacingPx = 40;
   const tickUnit = unitCandidates.find(c => c * pxPerUnit * zoom >= minSpacingPx) ?? unitCandidates[unitCandidates.length - 1];
@@ -172,11 +176,14 @@ function RulerOverlay({
 }
 
 
-// Extra canvas pixels on every side beyond the document boundary.
-// Objects placed outside the document are rendered here rather than being
-// silently clipped at the doc edge — they appear on top of the checkered
-// background instead of disappearing.
-const OVERFLOW_PAD = 600;
+// OVERFLOW_PAD is intentionally 0: the canvas equals the document boundary.
+// A non-zero pad caused the canvas element to be much larger than the page,
+// making overflow areas visible as a "ghost" rectangle next to the white page
+// when the outer wrapper used overflow:hidden + flex centering (the wrapper
+// centered the entire canvas, not the document within it).  Objects outside
+// the document are clipped by Fabric at the canvas edge — acceptable since
+// the export always crops to the document boundary anyway.
+const OVERFLOW_PAD = 0;
 
 // ── Component ─────────────────────────────────────────────────────────────
 
@@ -1238,21 +1245,15 @@ export default function CanvasArea() {
         </div>
       )}
 
-      {/* Fabric canvas — OVERFLOW_PAD pixels larger than the document on all sides */}
-      <div style={{ position: 'relative', flexShrink: 0 }}>
+      {/* Fabric canvas — sized exactly to the document boundary */}
+      <div style={{
+        position: 'relative', flexShrink: 0,
+        outline: '1px solid rgba(255,255,255,0.08)',
+        boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+      }}>
         <canvas ref={canvasElRef} />
 
-        {/* Page-boundary shadow: outlines only the document area, not the full canvas */}
-        <div style={{
-          position: 'absolute', pointerEvents: 'none', zIndex: 1,
-          left: OVERFLOW_PAD, top: OVERFLOW_PAD,
-          width:  Math.round(doc.width  * zoom),
-          height: Math.round(doc.height * zoom),
-          boxShadow: '0 0 0 1px rgba(255,255,255,0.08), 0 12px 48px rgba(0,0,0,0.7)',
-          outline: '1px solid rgba(255,255,255,0.06)',
-        }} />
-
-        {/* Smart alignment guides — g.pos is in canvas pixels (includes OVERFLOW_PAD) */}
+        {/* Smart alignment guides */}
         {guides.map((g, i) => (
           <div key={i} style={{
             position: 'absolute', pointerEvents: 'none', zIndex: 12,
@@ -1263,17 +1264,16 @@ export default function CanvasArea() {
           }} />
         ))}
 
-        {/* Rulers — anchored to the document area (offset by OVERFLOW_PAD) */}
+        {/* Rulers — sit just outside the canvas edge */}
         {showRulers && (
           <>
-            <RulerOverlay orientation="horizontal" size={Math.round(doc.width * zoom)} zoom={zoom} dpi={doc.dpi} docSize={doc.width} rulerUnit={rulerUnit} left={OVERFLOW_PAD} />
-            <RulerOverlay orientation="vertical"   size={Math.round(doc.height * zoom)} zoom={zoom} dpi={doc.dpi} docSize={doc.height} rulerUnit={rulerUnit} top={OVERFLOW_PAD} />
-            {/* Unit toggle in the ruler corner */}
+            <RulerOverlay orientation="horizontal" size={Math.round(doc.width * zoom)} zoom={zoom} dpi={doc.dpi} docSize={doc.width} rulerUnit={rulerUnit} />
+            <RulerOverlay orientation="vertical"   size={Math.round(doc.height * zoom)} zoom={zoom} dpi={doc.dpi} docSize={doc.height} rulerUnit={rulerUnit} />
+            {/* Unit toggle button at the ruler corner */}
             <button
               onClick={toggleRulerUnit}
               style={{
-                position: 'absolute',
-                top: OVERFLOW_PAD - 18, left: OVERFLOW_PAD - 18,
+                position: 'absolute', top: -18, left: -18,
                 width: 18, height: 18, padding: 0,
                 background: 'rgba(20,20,28,0.88)', border: '1px solid rgba(255,255,255,0.08)',
                 color: 'rgba(255,255,255,0.6)', fontSize: 7, lineHeight: 1,
