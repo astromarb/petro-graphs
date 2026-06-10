@@ -28,3 +28,4 @@ Petro Graphs is a native desktop application built with [Tauri](https://tauri.ap
 - Unit tests (`npm test`) run in jsdom and do not require Rust or Tauri.
 
 
+

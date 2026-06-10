@@ -27,22 +27,33 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
   const [exportDone, setExportDone] = useState(false);
   const prevBlobRef = useRef<string>('');
 
-  // Pre-render a small preview thumbnail from the live canvas
+  // Pre-render a preview thumbnail cropped to the document area only (excludes OVERFLOW_PAD)
   useEffect(() => {
     const fc = fabricCanvasRef.current;
     if (!fc) return;
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const src = (fc as any).lowerCanvasEl as HTMLCanvasElement;
-      const scale = 0.25;
+      const vpt = fc.viewportTransform ?? [1, 0, 0, 1, 0, 0];
+      // Canvas-pixel position and size of the document area
+      const sx = Math.max(0, Math.round(vpt[4]));
+      const sy = Math.max(0, Math.round(vpt[5]));
+      const sw = Math.round(doc.width  * vpt[0]);
+      const sh = Math.round(doc.height * vpt[3]);
+      // Clamp to what's actually on the canvas
+      const cw = Math.min(sw, src.width  - sx);
+      const ch = Math.min(sh, src.height - sy);
+      if (cw <= 0 || ch <= 0) return;
+      const previewScale = Math.min(1, 300 / Math.max(sw, sh));
       const dst = document.createElement('canvas');
-      dst.width  = Math.round(src.width  * scale);
-      dst.height = Math.round(src.height * scale);
-      dst.getContext('2d')!.drawImage(src, 0, 0, dst.width, dst.height);
+      dst.width  = Math.max(1, Math.round(sw * previewScale));
+      dst.height = Math.max(1, Math.round(sh * previewScale));
+      dst.getContext('2d')!.drawImage(src, sx, sy, cw, ch, 0, 0, dst.width, dst.height);
       const url = dst.toDataURL('image/png');
       if (prevBlobRef.current) URL.revokeObjectURL(prevBlobRef.current);
       setPreviewUrl(url);
     } catch { /* tainted canvas — skip preview */ }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const doExport = async () => {

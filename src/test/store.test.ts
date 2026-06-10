@@ -774,3 +774,73 @@ describe('pendingGrid', () => {
     expect(useStore.getState().tool).toBe('grid-place');
   });
 });
+
+// ── Pan / zoom state independence ────────────────────────────────────────────
+// Guards the fix for "zooming after panning reverts the view to the initial
+// position."
+//
+// Root cause: the zoom useEffect in CanvasArea called
+//   fc.setViewportTransform([zoom, 0, 0, zoom, OVERFLOW_PAD, OVERFLOW_PAD])
+// which hardcodes the translation to (OVERFLOW_PAD, OVERFLOW_PAD) on every
+// zoom change, discarding any pan the user accumulated via the pan tool.
+//
+// Fix: scene-space pan is tracked in `panSceneRef` (a component-level ref).
+// The zoom effect now computes:
+//   tx = OVERFLOW_PAD + panSceneRef.x * zoom
+//   ty = OVERFLOW_PAD + panSceneRef.y * zoom
+// so the same scene point stays visible after zoom changes.
+//
+// These tests verify the STORE CONTRACT: setZoom must not touch panX/panY,
+// and setPan must survive subsequent setZoom calls.  The component-level
+// panSceneRef is not observable here, but the store invariants document the
+// preconditions the fix relies on.
+
+describe('pan and zoom state independence', () => {
+  beforeEach(resetStore);
+
+  it('panX and panY default to 0', () => {
+    expect(useStore.getState().panX).toBe(0);
+    expect(useStore.getState().panY).toBe(0);
+  });
+
+  it('setPan stores the provided values', () => {
+    useStore.getState().setPan(150, -200);
+    expect(useStore.getState().panX).toBe(150);
+    expect(useStore.getState().panY).toBe(-200);
+  });
+
+  it('setZoom does not reset panX or panY', () => {
+    useStore.getState().setPan(120, 80);
+    useStore.getState().setZoom(2.0);
+    // Pan must be untouched — the component (not the store) applies it to the canvas
+    expect(useStore.getState().panX).toBe(120);
+    expect(useStore.getState().panY).toBe(80);
+  });
+
+  it('multiple setZoom calls preserve the last setPan values', () => {
+    useStore.getState().setPan(-600, -600);
+    useStore.getState().setZoom(1.5);
+    useStore.getState().setZoom(0.5);
+    useStore.getState().setZoom(3.0);
+    expect(useStore.getState().panX).toBe(-600);
+    expect(useStore.getState().panY).toBe(-600);
+  });
+
+  it('setPan after setZoom updates the pan without touching zoom', () => {
+    useStore.getState().setZoom(1.75);
+    useStore.getState().setPan(300, 400);
+    expect(useStore.getState().zoom).toBe(1.75);
+    expect(useStore.getState().panX).toBe(300);
+    expect(useStore.getState().panY).toBe(400);
+  });
+
+  it('setZoom clamps to [0.1, 4] but does not affect pan', () => {
+    useStore.getState().setPan(50, 50);
+    useStore.getState().setZoom(999); // clamped to 4
+    expect(useStore.getState().zoom).toBe(4);
+    expect(useStore.getState().panX).toBe(50);
+    useStore.getState().setZoom(0.001); // clamped to 0.1
+    expect(useStore.getState().zoom).toBe(0.1);
+    expect(useStore.getState().panX).toBe(50);
+  });
+});
