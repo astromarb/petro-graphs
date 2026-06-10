@@ -384,6 +384,38 @@ export default function CanvasArea() {
       fc.on('object:modified', (e) => {
         setGuidesRef.current([]);
         const fObj = e.target as fabric.FabricObject & { storeId?: string };
+
+        // Multi-selection move/scale: the event target is the ActiveSelection
+        // wrapper (no storeId), and the children's left/top are RELATIVE to
+        // the selection's center — so the per-object branch below never ran
+        // and the store kept the old positions. The next sync (e.g. placing
+        // a text label) then snapped everything back to its spawn position.
+        // Commit each child's ABSOLUTE coords via its full transform matrix,
+        // batched so the whole drag is one undo step.
+        if (!fObj?.storeId && fObj instanceof fabric.ActiveSelection) {
+          const updates: { id: string; patch: Partial<CanvasObject> }[] = [];
+          fObj.getObjects().forEach((child) => {
+            const c = child as fabric.FabricObject & { storeId?: string };
+            if (!c.storeId) return;
+            const m = c.calcTransformMatrix();
+            const q = fabric.util.qrDecompose(m);
+            const tl = fabric.util.transformPoint(
+              new fabric.Point(-(c.width ?? 0) / 2, -(c.height ?? 0) / 2), m,
+            );
+            updates.push({
+              id: c.storeId,
+              patch: {
+                x: Math.round(tl.x), y: Math.round(tl.y),
+                width:  (c.width  ?? 1) * Math.abs(q.scaleX),
+                height: (c.height ?? 1) * Math.abs(q.scaleY),
+                rotation: q.angle,
+              },
+            });
+          });
+          if (updates.length) useStore.getState().batchUpdateObjects(updates);
+          return;
+        }
+
         if (!fObj?.storeId) return;
         if (fObj === cropRectRef.current) return;
 
@@ -1121,6 +1153,24 @@ export default function CanvasArea() {
             createFabricObject(obj, freshGroups, fc, objMapRef.current);
             return;
           }
+        }
+
+        // Children of an active multi-selection live in selection-relative
+        // coordinates — writing absolute store coords onto them would warp the
+        // visual. Their on-screen position is already correct right after a
+        // multi-move commit, so skip the sync; if the store genuinely diverged
+        // (e.g. undo while a selection is active), discard the selection so
+        // the absolute sync below applies cleanly.
+        const parentGroup = (existing as fabric.FabricObject & { group?: fabric.Group }).group;
+        if (parentGroup && parentGroup === fc.getActiveObject()) {
+          const m  = existing.calcTransformMatrix();
+          const tl = fabric.util.transformPoint(
+            new fabric.Point(-(existing.width ?? 0) / 2, -(existing.height ?? 0) / 2), m,
+          );
+          if (Math.abs(tl.x - obj.x) < 1 && Math.abs(tl.y - obj.y) < 1) return;
+          suppressSelectionClear = true;
+          fc.discardActiveObject();
+          suppressSelectionClear = false;
         }
 
         syncFabricProps(existing, obj);
