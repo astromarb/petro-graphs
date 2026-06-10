@@ -18,7 +18,7 @@ const TOOLS: { id: Tool; icon: React.ReactNode; label: string; sep?: boolean }[]
   { id: 'pan',      icon: <Hand size={14} />,           label: 'Pan (H) · Space to temp-pan' },
   { id: 'text',     icon: <Type size={14} />,           label: 'Text / LaTeX (T)', sep: true },
   { id: 'shape',    icon: <Square size={14} />,          label: 'Shape (S)' },
-  { id: 'scalebar', icon: <Ruler size={14} />,           label: 'Scale Bar (B) — select calibrated image first' },
+  { id: 'scalebar', icon: <Ruler size={14} />,           label: 'Scale Bar (B) — click a calibrated image to place' },
   { id: 'inset',    icon: <Crop size={14} />,            label: 'Inset (I)' },
 ];
 
