@@ -2,7 +2,7 @@
 <p align="center"> <img width="125" height="125" alt="image" src="https://github.com/user-attachments/assets/45decd6a-1a68-43d3-a572-47fee3dcc20d" /> </p>
 
 **Desktop application for composing, annotating, and exporting geological photomicrograph figures, purpose-built for cross-polarized and plane-polarized light (XPL/PPL) thin-section photography.**
-
+---
 ### Download and install
 | Platform | File | Notes |
 |---|---|---|
@@ -20,7 +20,6 @@
 
 ---
 ## Running as a Desktop App
-
 Petro Graphs is a native desktop application built with [Tauri](https://tauri.app). You do **not** need a browser or web server to run it.
 
 ## Tech Stack
