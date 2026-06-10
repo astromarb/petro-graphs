@@ -184,9 +184,11 @@ export default function CanvasArea() {
   const canvasElRef = useRef<HTMLCanvasElement>(null);
   const fabricRef   = useRef<fabric.Canvas | null>(null);
   const wrapRef     = useRef<HTMLDivElement>(null);
+  // Serializes async Fabric dispose → create across remounts (see init effect)
+  const disposeChainRef = useRef<Promise<unknown>>(Promise.resolve());
 
   const {
-    doc, groups, addObject, addObjects, setSelectedId,
+    doc, groups, addObject, setSelectedId,
     tool, setTool, zoom, setZoom, setPan,
     insets, addInset,
     addImageToGroup,
@@ -276,405 +278,415 @@ export default function CanvasArea() {
 
   // ── Initialize Fabric canvas (once) ──────────────────────────────────
   useEffect(() => {
-    if (!canvasElRef.current) return;
-    // Guard against React StrictMode double-invocation: if a canvas already
-    // exists on this element (Fabric wraps it and sets data-fabric), skip re-init.
-    if (fabricRef.current) return;
+    const el = canvasElRef.current;
+    if (!el) return;
+    let cancelled = false;
+    let created: fabric.Canvas | null = null;
 
-    const fc = new fabric.Canvas(canvasElRef.current, {
-      selection: true,
-      preserveObjectStacking: true,
-    });
+    // Fabric's dispose() is async: it tears down the DOM wrapper after the
+    // current render settles. If a remount (React StrictMode in dev, or any
+    // future slot/page switching) creates a new Canvas around the same
+    // element while the old one is mid-dispose, the old teardown rips the
+    // element out of the new instance's container — leaving a dead "ghost"
+    // canvas in the DOM and a misaligned interaction layer. Chaining
+    // create/dispose on a single promise serializes the lifecycle.
+    disposeChainRef.current = disposeChainRef.current.then(() => {
+      if (cancelled) return;
 
-    // Size canvas to fit the viewport immediately so we never flash at zoom=1
-    const wrap = wrapRef.current;
-    if (wrap) {
-      const padded = 0.92;
-      const { doc: d } = useStore.getState();
-      const fitZoom = Math.min(
-        (wrap.clientWidth  * padded) / d.width,
-        (wrap.clientHeight * padded) / d.height,
-      );
-      const z = Math.max(0.05, Math.min(4, fitZoom));
-      fc.setDimensions({ width: Math.round(d.width * z), height: Math.round(d.height * z) });
-      fc.setZoom(z);
-      useStore.getState().setZoom(z);
-    }
-
-    fabricRef.current = fc;
-    sharedFabricRef.current = fc;
-
-    // Document background rect — the white page within the larger canvas.
-    // Canvas background is transparent so the CSS checkerboard shows through
-    // in the OVERFLOW_PAD margin; only this rect is "white".
-    const bgRect = new fabric.Rect({
-      left: 0, top: 0,
-      width: useStore.getState().doc.width,
-      height: useStore.getState().doc.height,
-      fill: useStore.getState().doc.background,
-      selectable: false, evented: false,
-    });
-    fc.add(bgRect);
-    docBgRef.current = bgRect;
-    // fc.backgroundColor stays '' (transparent)
-
-    setFabricReady(true);
-
-    fc.on('selection:created', () => {
-      const sel = fc.getActiveObject() as fabric.FabricObject & { storeId?: string };
-      if (sel?.storeId) setSelectedIdRef.current(sel.storeId);
-    });
-    fc.on('selection:updated', () => {
-      const sel = fc.getActiveObject() as fabric.FabricObject & { storeId?: string };
-      if (sel?.storeId) setSelectedIdRef.current(sel.storeId);
-    });
-    fc.on('selection:cleared', () => setSelectedIdRef.current(null));
-
-    fc.on('object:modified', (e) => {
-      setGuidesRef.current([]);
-      const fObj = e.target as fabric.FabricObject & { storeId?: string };
-      if (!fObj?.storeId) return;
-      if (fObj === cropRectRef.current) return;
-      useStore.getState().updateObject(fObj.storeId, {
-        x: fObj.left ?? 0,
-        y: fObj.top  ?? 0,
-        width:  (fObj.width  ?? 1) * (fObj.scaleX ?? 1),
-        height: (fObj.height ?? 1) * (fObj.scaleY ?? 1),
-        rotation: fObj.angle ?? 0,
+      const fc = new fabric.Canvas(el, {
+        selection: true,
+        preserveObjectStacking: true,
       });
-    });
+      created = fc;
 
-    // Keep mode tags tracking their image live during drag (before store commits).
-    // Also compute smart alignment guides.
-    fc.on('object:moving', (e) => {
-      const fObj = e.target as fabric.FabricObject & { storeId?: string };
-      if (!fObj?.storeId) return;
-
-      // ── Smart guides ─────────────────────────────────────────────────
-      const { doc: sd } = useStore.getState();
-      const vt   = fc.viewportTransform ?? [1,0,0,1,0,0];
-      const zoom = vt[0];
-      const panX = vt[4];
-      const panY = vt[5];
-
-      // Moving object bounds in doc pixels
-      const mL = fObj.left  ?? 0;
-      const mT = fObj.top   ?? 0;
-      const mW = (fObj.width  ?? 0) * (fObj.scaleX ?? 1);
-      const mH = (fObj.height ?? 0) * (fObj.scaleY ?? 1);
-      const mR  = mL + mW;
-      const mMX = mL + mW / 2;
-      const mB  = mT + mH;
-      const mMY = mT + mH / 2;
-      const movingEdgesX = [mL, mMX, mR];
-      const movingEdgesY = [mT, mMY, mB];
-
-      // Reference snap points: canvas edges + other objects
-      const refX = new Set<number>([0, sd.width / 2, sd.width]);
-      const refY = new Set<number>([0, sd.height / 2, sd.height]);
-      sd.objects.forEach(o => {
-        if (o.id === fObj.storeId) return;
-        refX.add(o.x); refX.add(o.x + o.width / 2); refX.add(o.x + o.width);
-        refY.add(o.y); refY.add(o.y + o.height / 2); refY.add(o.y + o.height);
-      });
-
-      const SNAP_THRESH = 6 / zoom; // 6 screen px → doc px
-      const activeGuides: { type: 'v' | 'h'; pos: number }[] = [];
-
-      // Snap and record guides on X axis
-      let snappedX = false;
-      outer_x: for (const ref of refX) {
-        for (let ei = 0; ei < movingEdgesX.length; ei++) {
-          const diff = movingEdgesX[ei] - ref;
-          if (Math.abs(diff) <= SNAP_THRESH) {
-            fObj.set({ left: mL - diff });
-            activeGuides.push({ type: 'v', pos: Math.round(ref * zoom + panX) });
-            snappedX = true;
-            break outer_x;
-          }
-        }
-      }
-      void snappedX;
-
-      // Snap and record guides on Y axis
-      let snappedY = false;
-      outer_y: for (const ref of refY) {
-        for (let ei = 0; ei < movingEdgesY.length; ei++) {
-          const diff = movingEdgesY[ei] - ref;
-          if (Math.abs(diff) <= SNAP_THRESH) {
-            fObj.set({ top: mT - diff });
-            activeGuides.push({ type: 'h', pos: Math.round(ref * zoom + panY) });
-            snappedY = true;
-            break outer_y;
-          }
-        }
-      }
-      void snappedY;
-
-      setGuidesRef.current(activeGuides);
-    });
-
-    // ── mouse:down — start grid-place rect draw ───────────────────────
-    fc.on('mouse:down', (options) => {
-      if (toolRef.current === 'grid-place') {
-        const pt = getScenePt(fc, options);
-        if (!pt) return;
-        gridDrawRef.current = { x1: pt.x, y1: pt.y, x2: pt.x, y2: pt.y };
-        const preview = new fabric.Rect({
-          left: pt.x, top: pt.y, width: 0, height: 0,
-          fill: 'rgba(170,59,255,0.12)',
-          stroke: '#aa3bff', strokeWidth: 2,
-          strokeDashArray: [6, 4],
-          selectable: false, evented: false,
-        });
-        gridRectPreviewRef.current = preview;
-        fc.add(preview);
-        fc.renderAll();
-        return;
-      }
-    });
-
-    // ── mouse:down — start scalebar draw (requires calibrated image) ─────
-    fc.on('mouse:down', (options) => {
-      if (toolRef.current !== 'scalebar') return;
-      if (scalebarPhaseRef.current !== 'idle') return;
-
-      // Require a calibrated image to be selected
-      const { selectedId, doc: sd, groups: sg } = useStore.getState();
-      const imgObj = sd.objects.find(o => o.id === selectedId && o.type === 'image') as ImageObject | undefined;
-      const srcGrp = sg.find(gr => gr.id === imgObj?.groupId);
-      const srcImg = srcGrp?.images.find(i => i.id === imgObj?.imageId);
-      const cal    = srcImg?.calibration;
-      if (!imgObj || !srcImg || !cal) return;
-
-      const canvasUnitsPerPx  = cal.unitsPerPixel * (srcImg.width / imgObj.width);
-      const metersPerCanvasPx = canvasUnitsPerPx * (UNIT_METERS[cal.unit] ?? 1e-6);
-      scalebarSourceRef.current = { metersPerCanvasPx, unit: cal.unit };
-
-      const pt = getScenePt(fc, options);
-      if (!pt) return;
-      const line = new fabric.Line([pt.x, pt.y, pt.x, pt.y], {
-        stroke: '#ffcc00', strokeWidth: 3,
+      fabricRef.current = fc;
+      sharedFabricRef.current = fc;
+  
+      // Document background rect — the white page within the larger canvas.
+      // Canvas background is transparent so the CSS checkerboard shows through
+      // in the OVERFLOW_PAD margin; only this rect is "white".
+      const bgRect = new fabric.Rect({
+        left: 0, top: 0,
+        width: useStore.getState().doc.width,
+        height: useStore.getState().doc.height,
+        fill: useStore.getState().doc.background,
         selectable: false, evented: false,
-        strokeLineCap: 'round',
       });
-      scalebarPreviewRef.current = line;
-      scalebarDrawRef.current = { x1: pt.x, y1: pt.y, x2: pt.x, y2: pt.y };
-      fc.add(line);
-      fc.renderAll();
-      setScalebarPhase('drawing');
-    });
-
-    // ── mouse:move — update grid-place rect preview ───────────────────
-    fc.on('mouse:move', (options) => {
-      if (toolRef.current === 'grid-place' && gridDrawRef.current && gridRectPreviewRef.current) {
+      fc.add(bgRect);
+      docBgRef.current = bgRect;
+      // fc.backgroundColor stays '' (transparent)
+  
+      setFabricReady(true);
+  
+      fc.on('selection:created', () => {
+        const sel = fc.getActiveObject() as fabric.FabricObject & { storeId?: string };
+        if (sel?.storeId) setSelectedIdRef.current(sel.storeId);
+      });
+      fc.on('selection:updated', () => {
+        const sel = fc.getActiveObject() as fabric.FabricObject & { storeId?: string };
+        if (sel?.storeId) setSelectedIdRef.current(sel.storeId);
+      });
+      fc.on('selection:cleared', () => setSelectedIdRef.current(null));
+  
+      fc.on('object:modified', (e) => {
+        setGuidesRef.current([]);
+        const fObj = e.target as fabric.FabricObject & { storeId?: string };
+        if (!fObj?.storeId) return;
+        if (fObj === cropRectRef.current) return;
+        useStore.getState().updateObject(fObj.storeId, {
+          x: fObj.left ?? 0,
+          y: fObj.top  ?? 0,
+          width:  (fObj.width  ?? 1) * (fObj.scaleX ?? 1),
+          height: (fObj.height ?? 1) * (fObj.scaleY ?? 1),
+          rotation: fObj.angle ?? 0,
+        });
+      });
+  
+      // Keep mode tags tracking their image live during drag (before store commits).
+      // Also compute smart alignment guides.
+      fc.on('object:moving', (e) => {
+        const fObj = e.target as fabric.FabricObject & { storeId?: string };
+        if (!fObj?.storeId) return;
+  
+        // ── Smart guides ─────────────────────────────────────────────────
+        const { doc: sd } = useStore.getState();
+        const vt   = fc.viewportTransform ?? [1,0,0,1,0,0];
+        const zoom = vt[0];
+        const panX = vt[4];
+        const panY = vt[5];
+  
+        // Moving object bounds in doc pixels
+        const mL = fObj.left  ?? 0;
+        const mT = fObj.top   ?? 0;
+        const mW = (fObj.width  ?? 0) * (fObj.scaleX ?? 1);
+        const mH = (fObj.height ?? 0) * (fObj.scaleY ?? 1);
+        const mR  = mL + mW;
+        const mMX = mL + mW / 2;
+        const mB  = mT + mH;
+        const mMY = mT + mH / 2;
+        const movingEdgesX = [mL, mMX, mR];
+        const movingEdgesY = [mT, mMY, mB];
+  
+        // Reference snap points: canvas edges + other objects
+        const refX = new Set<number>([0, sd.width / 2, sd.width]);
+        const refY = new Set<number>([0, sd.height / 2, sd.height]);
+        sd.objects.forEach(o => {
+          if (o.id === fObj.storeId) return;
+          refX.add(o.x); refX.add(o.x + o.width / 2); refX.add(o.x + o.width);
+          refY.add(o.y); refY.add(o.y + o.height / 2); refY.add(o.y + o.height);
+        });
+  
+        const SNAP_THRESH = 6 / zoom; // 6 screen px → doc px
+        const activeGuides: { type: 'v' | 'h'; pos: number }[] = [];
+  
+        // Snap and record guides on X axis
+        let snappedX = false;
+        outer_x: for (const ref of refX) {
+          for (let ei = 0; ei < movingEdgesX.length; ei++) {
+            const diff = movingEdgesX[ei] - ref;
+            if (Math.abs(diff) <= SNAP_THRESH) {
+              fObj.set({ left: mL - diff });
+              activeGuides.push({ type: 'v', pos: Math.round(ref * zoom + panX) });
+              snappedX = true;
+              break outer_x;
+            }
+          }
+        }
+        void snappedX;
+  
+        // Snap and record guides on Y axis
+        let snappedY = false;
+        outer_y: for (const ref of refY) {
+          for (let ei = 0; ei < movingEdgesY.length; ei++) {
+            const diff = movingEdgesY[ei] - ref;
+            if (Math.abs(diff) <= SNAP_THRESH) {
+              fObj.set({ top: mT - diff });
+              activeGuides.push({ type: 'h', pos: Math.round(ref * zoom + panY) });
+              snappedY = true;
+              break outer_y;
+            }
+          }
+        }
+        void snappedY;
+  
+        setGuidesRef.current(activeGuides);
+      });
+  
+      // ── mouse:down — start grid-place rect draw ───────────────────────
+      fc.on('mouse:down', (options) => {
+        if (toolRef.current === 'grid-place') {
+          const pt = getScenePt(fc, options);
+          if (!pt) return;
+          gridDrawRef.current = { x1: pt.x, y1: pt.y, x2: pt.x, y2: pt.y };
+          const preview = new fabric.Rect({
+            left: pt.x, top: pt.y, width: 0, height: 0,
+            fill: 'rgba(170,59,255,0.12)',
+            stroke: '#aa3bff', strokeWidth: 2,
+            strokeDashArray: [6, 4],
+            selectable: false, evented: false,
+          });
+          gridRectPreviewRef.current = preview;
+          fc.add(preview);
+          fc.renderAll();
+          return;
+        }
+      });
+  
+      // ── mouse:down — start scalebar draw (requires calibrated image) ─────
+      fc.on('mouse:down', (options) => {
+        if (toolRef.current !== 'scalebar') return;
+        if (scalebarPhaseRef.current !== 'idle') return;
+  
+        // Require a calibrated image to be selected
+        const { selectedId, doc: sd, groups: sg } = useStore.getState();
+        const imgObj = sd.objects.find(o => o.id === selectedId && o.type === 'image') as ImageObject | undefined;
+        const srcGrp = sg.find(gr => gr.id === imgObj?.groupId);
+        const srcImg = srcGrp?.images.find(i => i.id === imgObj?.imageId);
+        const cal    = srcImg?.calibration;
+        if (!imgObj || !srcImg || !cal) return;
+  
+        const canvasUnitsPerPx  = cal.unitsPerPixel * (srcImg.width / imgObj.width);
+        const metersPerCanvasPx = canvasUnitsPerPx * (UNIT_METERS[cal.unit] ?? 1e-6);
+        scalebarSourceRef.current = { metersPerCanvasPx, unit: cal.unit };
+  
         const pt = getScenePt(fc, options);
         if (!pt) return;
-        const d = gridDrawRef.current;
-        d.x2 = pt.x; d.y2 = pt.y;
-        const left   = Math.min(d.x1, d.x2);
-        const top    = Math.min(d.y1, d.y2);
-        const width  = Math.abs(d.x2 - d.x1);
-        const height = Math.abs(d.y2 - d.y1);
-        gridRectPreviewRef.current.set({ left, top, width, height });
+        const line = new fabric.Line([pt.x, pt.y, pt.x, pt.y], {
+          stroke: '#ffcc00', strokeWidth: 3,
+          selectable: false, evented: false,
+          strokeLineCap: 'round',
+        });
+        scalebarPreviewRef.current = line;
+        scalebarDrawRef.current = { x1: pt.x, y1: pt.y, x2: pt.x, y2: pt.y };
+        fc.add(line);
         fc.renderAll();
-        return;
-      }
-    });
-
-    // ── mouse:move — update scalebar preview line ─────────────────────
-    fc.on('mouse:move', (options) => {
-      if (toolRef.current !== 'scalebar') return;
-      if (scalebarPhaseRef.current !== 'drawing') return;
-      const pt = getScenePt(fc, options);
-      if (!pt || !scalebarPreviewRef.current || !scalebarDrawRef.current) return;
-      scalebarPreviewRef.current.set({ x2: pt.x, y2: pt.y });
-      scalebarDrawRef.current.x2 = pt.x;
-      scalebarDrawRef.current.y2 = pt.y;
-      fc.renderAll();
-    });
-
-    // ── mouse:up — finish grid-place rect draw ────────────────────────
-    fc.on('mouse:up', () => {
-      if (toolRef.current !== 'grid-place') return;
-      const d   = gridDrawRef.current;
-      const pg  = pendingGridRef.current;
-      // Remove preview rect
-      if (gridRectPreviewRef.current) {
-        fc.remove(gridRectPreviewRef.current);
-        gridRectPreviewRef.current = null;
+        setScalebarPhase('drawing');
+      });
+  
+      // ── mouse:move — update grid-place rect preview ───────────────────
+      fc.on('mouse:move', (options) => {
+        if (toolRef.current === 'grid-place' && gridDrawRef.current && gridRectPreviewRef.current) {
+          const pt = getScenePt(fc, options);
+          if (!pt) return;
+          const d = gridDrawRef.current;
+          d.x2 = pt.x; d.y2 = pt.y;
+          const left   = Math.min(d.x1, d.x2);
+          const top    = Math.min(d.y1, d.y2);
+          const width  = Math.abs(d.x2 - d.x1);
+          const height = Math.abs(d.y2 - d.y1);
+          gridRectPreviewRef.current.set({ left, top, width, height });
+          fc.renderAll();
+          return;
+        }
+      });
+  
+      // ── mouse:move — update scalebar preview line ─────────────────────
+      fc.on('mouse:move', (options) => {
+        if (toolRef.current !== 'scalebar') return;
+        if (scalebarPhaseRef.current !== 'drawing') return;
+        const pt = getScenePt(fc, options);
+        if (!pt || !scalebarPreviewRef.current || !scalebarDrawRef.current) return;
+        scalebarPreviewRef.current.set({ x2: pt.x, y2: pt.y });
+        scalebarDrawRef.current.x2 = pt.x;
+        scalebarDrawRef.current.y2 = pt.y;
         fc.renderAll();
-      }
-      gridDrawRef.current = null;
-      if (!d || !pg) { setToolRef.current('select'); return; }
-
-      const areaW = Math.abs(d.x2 - d.x1);
-      const areaH = Math.abs(d.y2 - d.y1);
-      if (areaW < 20 || areaH < 20) { setToolRef.current('select'); return; }
-
-      const { groups: sg } = useStore.getState();
-      const grp = sg.find(g => g.id === pg.groupId);
-      if (!grp) { setToolRef.current('select'); return; }
-
-      const imgs = pg.imageIds
-        .map(id => grp.images.find(i => i.id === id))
-        .filter(Boolean) as typeof grp.images;
-
-      if (imgs.length === 0) { setToolRef.current('select'); return; }
-
-      const cols  = pg.cols;
-      const rows  = Math.ceil(imgs.length / cols);
-      const gap   = pg.gap;
-      const cellW = Math.floor((areaW - gap * (cols - 1)) / cols);
-      const cellH = Math.floor((areaH - gap * (rows - 1)) / rows);
-      const originX = Math.min(d.x1, d.x2);
-      const originY = Math.min(d.y1, d.y2);
-
-      if (cellW < 10 || cellH < 10) { setToolRef.current('select'); return; }
-
-      const objs: CanvasObject[] = imgs.map((img, idx) => ({
-        id: nanoid(),
-        type: 'image' as const,
-        imageId: img.id,
-        groupId: grp.id,
-        mode: img.mode,
-        x: Math.round(originX + (idx % cols) * (cellW + gap)),
-        y: Math.round(originY + Math.floor(idx / cols) * (cellH + gap)),
-        width:  cellW,
-        height: cellH,
-        rotation: 0, locked: false, visible: true,
-        label: img.name,
-        border: { color: '#ffffff', width: 2, style: 'solid' as const, radius: 0 },
-        opacity: 1,
-        adjustments: { ...DEFAULT_ADJUSTMENTS },
-      } as ImageObject));
-
-      useStore.getState().addObjects(objs);
-      useStore.getState().setPendingGrid(null);
-      setToolRef.current('select');
-    });
-
-    // ── mouse:up — place text/shape, finish scalebar, start inset ────
-    fc.on('mouse:up', (options) => {
-      const currentTool = toolRef.current;
-
-      // Finish scalebar draw — create directly from calibration
-      if (currentTool === 'scalebar' && scalebarPhaseRef.current === 'drawing') {
-        if (scalebarPreviewRef.current) {
-          fc.remove(scalebarPreviewRef.current);
-          scalebarPreviewRef.current = null;
+      });
+  
+      // ── mouse:up — finish grid-place rect draw ────────────────────────
+      fc.on('mouse:up', () => {
+        if (toolRef.current !== 'grid-place') return;
+        const d   = gridDrawRef.current;
+        const pg  = pendingGridRef.current;
+        // Remove preview rect
+        if (gridRectPreviewRef.current) {
+          fc.remove(gridRectPreviewRef.current);
+          gridRectPreviewRef.current = null;
           fc.renderAll();
         }
-        const d   = scalebarDrawRef.current;
-        const src = scalebarSourceRef.current;
-        scalebarDrawRef.current   = null;
-        scalebarSourceRef.current = null;
-        setScalebarPhase('idle');
-        if (!d || !src) return;
-        const dx = d.x2 - d.x1;
-        const dy = d.y2 - d.y1;
-        const pixLen = Math.sqrt(dx * dx + dy * dy);
-        if (pixLen < 5) return;
-        const pLen = Math.round(pixLen);
-        const angle = Math.atan2(dy, dx) * (180 / Math.PI);
-        const rawReal = pLen * src.metersPerCanvasPx / (UNIT_METERS[src.unit] ?? 1e-6);
-        // Round to 3 significant figures for a clean label
-        const realLength = parseFloat(rawReal.toPrecision(3));
-        useStore.getState().addObject({
-          id: nanoid(), type: 'scalebar',
-          x: Math.round(Math.min(d.x1, d.x2)),
-          y: Math.round(Math.min(d.y1, d.y2)) - 2,
-          width: pLen, height: 28,
-          rotation: angle, locked: false, visible: true,
-          label: `${realLength} ${src.unit}`,
-          length: pLen, realLength, unit: src.unit,
-          color: '#ffffff', labelColor: '#ffffff', thickness: 4, fontSize: 13,
-          metersPerCanvasPx: src.metersPerCanvasPx,
-        });
-        return;
-      }
-
-      if (!['text', 'shape', 'inset'].includes(currentTool)) return; // grid-place handled in its own handler above
-
-      // Guard: ignore if we just placed an object in this same click cycle
-      if (justPlacedRef.current) { justPlacedRef.current = false; return; }
-
-      const target = options.target as (fabric.FabricObject & { storeId?: string }) | null;
-      const pt = getScenePt(fc, options);
-      if (!pt) return;
-      const cx = Math.round(pt.x);
-      const cy = Math.round(pt.y);
-
-      // ── Inset: click on an image to begin crop selection ─────────────
-      if (currentTool === 'inset') {
-        if (insetPhaseRef.current === 'selecting') return;
-        if (!target?.storeId) return;
-        const storeObj = useStore.getState().doc.objects.find(o => o.id === target.storeId);
-        if (!storeObj || storeObj.type !== 'image') return;
-
-        setInsetSourceId(target.storeId);
-        setInsetPhase('selecting');
-
-        const defaultW = storeObj.width * 0.45;
-        const defaultH = storeObj.height * 0.45;
-        const rect = new fabric.Rect({
-          left:   storeObj.x + storeObj.width  * 0.275,
-          top:    storeObj.y + storeObj.height * 0.275,
-          width:  defaultW,
-          height: defaultH,
-          fill:   'rgba(170,59,255,0.10)',
-          stroke: '#aa3bff',
-          strokeWidth: 2,
-          strokeDashArray: [6, 4],
-          cornerColor: '#aa3bff',
-          cornerSize: 10,
-          transparentCorners: false,
-          selectable: true,
-          evented: true,
-        });
-        cropRectRef.current = rect;
-        fc.add(rect);
-        fc.bringObjectToFront(rect); // ensure crop rect is above all images
-        fc.setActiveObject(rect);
-        fc.renderAll();
-        return;
-      }
-
-      // Don't place on top of a user-placed store object
-      if (target?.storeId) return;
-
-      const state = useStore.getState();
-
-      if (currentTool === 'text') {
-        const newId = nanoid();
-        state.addObject({
-          id: newId, type: 'text',
-          content: 'Label', isLatex: false,
-          x: cx, y: cy, width: 200, height: 40, rotation: 0,
-          locked: false, visible: true, label: 'Text',
-          fontSize: 16, color: '#000000', fontWeight: 'normal', align: 'left',
-        });
-        // Auto-return to select so next click selects rather than places
+        gridDrawRef.current = null;
+        if (!d || !pg) { setToolRef.current('select'); return; }
+  
+        const areaW = Math.abs(d.x2 - d.x1);
+        const areaH = Math.abs(d.y2 - d.y1);
+        if (areaW < 20 || areaH < 20) { setToolRef.current('select'); return; }
+  
+        const { groups: sg } = useStore.getState();
+        const grp = sg.find(g => g.id === pg.groupId);
+        if (!grp) { setToolRef.current('select'); return; }
+  
+        const imgs = pg.imageIds
+          .map(id => grp.images.find(i => i.id === id))
+          .filter(Boolean) as typeof grp.images;
+  
+        if (imgs.length === 0) { setToolRef.current('select'); return; }
+  
+        const cols  = pg.cols;
+        const rows  = Math.ceil(imgs.length / cols);
+        const gap   = pg.gap;
+        const cellW = Math.floor((areaW - gap * (cols - 1)) / cols);
+        const cellH = Math.floor((areaH - gap * (rows - 1)) / rows);
+        const originX = Math.min(d.x1, d.x2);
+        const originY = Math.min(d.y1, d.y2);
+  
+        if (cellW < 10 || cellH < 10) { setToolRef.current('select'); return; }
+  
+        const objs: CanvasObject[] = imgs.map((img, idx) => ({
+          id: nanoid(),
+          type: 'image' as const,
+          imageId: img.id,
+          groupId: grp.id,
+          mode: img.mode,
+          x: Math.round(originX + (idx % cols) * (cellW + gap)),
+          y: Math.round(originY + Math.floor(idx / cols) * (cellH + gap)),
+          width:  cellW,
+          height: cellH,
+          rotation: 0, locked: false, visible: true,
+          label: img.name,
+          border: { color: '#ffffff', width: 2, style: 'solid' as const, radius: 0 },
+          opacity: 1,
+          adjustments: { ...DEFAULT_ADJUSTMENTS },
+        } as ImageObject));
+  
+        useStore.getState().addObjects(objs);
+        useStore.getState().setPendingGrid(null);
         setToolRef.current('select');
-        // Select the newly placed object after fabric sync
-        setTimeout(() => setSelectedIdRef.current(newId), 50);
-      }
-
-      if (currentTool === 'shape') {
-        const newId = nanoid();
-        state.addObject({
-          id: newId, type: 'shape', shape: 'rect',
-          x: cx - 60, y: cy - 40, width: 120, height: 80, rotation: 0,
-          locked: false, visible: true, label: 'Shape',
-          fill: '#aa3bff', fillOpacity: 0,
-          border: { color: '#aa3bff', width: 2, style: 'solid', radius: 4 },
-        });
-        setToolRef.current('select');
-        setTimeout(() => setSelectedIdRef.current(newId), 50);
-      }
+      });
+  
+      // ── mouse:up — place text/shape, finish scalebar, start inset ────
+      fc.on('mouse:up', (options) => {
+        const currentTool = toolRef.current;
+  
+        // Finish scalebar draw — create directly from calibration
+        if (currentTool === 'scalebar' && scalebarPhaseRef.current === 'drawing') {
+          if (scalebarPreviewRef.current) {
+            fc.remove(scalebarPreviewRef.current);
+            scalebarPreviewRef.current = null;
+            fc.renderAll();
+          }
+          const d   = scalebarDrawRef.current;
+          const src = scalebarSourceRef.current;
+          scalebarDrawRef.current   = null;
+          scalebarSourceRef.current = null;
+          setScalebarPhase('idle');
+          if (!d || !src) return;
+          const dx = d.x2 - d.x1;
+          const dy = d.y2 - d.y1;
+          const pixLen = Math.sqrt(dx * dx + dy * dy);
+          if (pixLen < 5) return;
+          const pLen = Math.round(pixLen);
+          const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+          const rawReal = pLen * src.metersPerCanvasPx / (UNIT_METERS[src.unit] ?? 1e-6);
+          // Round to 3 significant figures for a clean label
+          const realLength = parseFloat(rawReal.toPrecision(3));
+          useStore.getState().addObject({
+            id: nanoid(), type: 'scalebar',
+            x: Math.round(Math.min(d.x1, d.x2)),
+            y: Math.round(Math.min(d.y1, d.y2)) - 2,
+            width: pLen, height: 28,
+            rotation: angle, locked: false, visible: true,
+            label: `${realLength} ${src.unit}`,
+            length: pLen, realLength, unit: src.unit,
+            color: '#ffffff', labelColor: '#ffffff', thickness: 4, fontSize: 13,
+            metersPerCanvasPx: src.metersPerCanvasPx,
+          });
+          return;
+        }
+  
+        if (!['text', 'shape', 'inset'].includes(currentTool)) return; // grid-place handled in its own handler above
+  
+        // Guard: ignore if we just placed an object in this same click cycle
+        if (justPlacedRef.current) { justPlacedRef.current = false; return; }
+  
+        const target = options.target as (fabric.FabricObject & { storeId?: string }) | null;
+        const pt = getScenePt(fc, options);
+        if (!pt) return;
+        const cx = Math.round(pt.x);
+        const cy = Math.round(pt.y);
+  
+        // ── Inset: click on an image to begin crop selection ─────────────
+        if (currentTool === 'inset') {
+          if (insetPhaseRef.current === 'selecting') return;
+          if (!target?.storeId) return;
+          const storeObj = useStore.getState().doc.objects.find(o => o.id === target.storeId);
+          if (!storeObj || storeObj.type !== 'image') return;
+  
+          setInsetSourceId(target.storeId);
+          setInsetPhase('selecting');
+  
+          const defaultW = storeObj.width * 0.45;
+          const defaultH = storeObj.height * 0.45;
+          const rect = new fabric.Rect({
+            left:   storeObj.x + storeObj.width  * 0.275,
+            top:    storeObj.y + storeObj.height * 0.275,
+            width:  defaultW,
+            height: defaultH,
+            fill:   'rgba(170,59,255,0.10)',
+            stroke: '#aa3bff',
+            strokeWidth: 2,
+            strokeDashArray: [6, 4],
+            cornerColor: '#aa3bff',
+            cornerSize: 10,
+            transparentCorners: false,
+            selectable: true,
+            evented: true,
+          });
+          cropRectRef.current = rect;
+          fc.add(rect);
+          fc.bringObjectToFront(rect); // ensure crop rect is above all images
+          fc.setActiveObject(rect);
+          fc.renderAll();
+          return;
+        }
+  
+        // Don't place on top of a user-placed store object
+        if (target?.storeId) return;
+  
+        const state = useStore.getState();
+  
+        if (currentTool === 'text') {
+          const newId = nanoid();
+          state.addObject({
+            id: newId, type: 'text',
+            content: 'Label', isLatex: false,
+            x: cx, y: cy, width: 200, height: 40, rotation: 0,
+            locked: false, visible: true, label: 'Text',
+            fontSize: 16, color: '#000000', fontWeight: 'normal', align: 'left',
+          });
+          // Auto-return to select so next click selects rather than places
+          setToolRef.current('select');
+          // Select the newly placed object after fabric sync
+          setTimeout(() => setSelectedIdRef.current(newId), 50);
+        }
+  
+        if (currentTool === 'shape') {
+          const newId = nanoid();
+          state.addObject({
+            id: newId, type: 'shape', shape: 'rect',
+            x: cx - 60, y: cy - 40, width: 120, height: 80, rotation: 0,
+            locked: false, visible: true, label: 'Shape',
+            fill: '#aa3bff', fillOpacity: 0,
+            border: { color: '#aa3bff', width: 2, style: 'solid', radius: 4 },
+          });
+          setToolRef.current('select');
+          setTimeout(() => setSelectedIdRef.current(newId), 50);
+        }
+      });
     });
 
-    return () => { fc.dispose(); fabricRef.current = null; };
+    return () => {
+      cancelled = true;
+      // Queue the dispose on the same chain so the next mount waits for it.
+      disposeChainRef.current = disposeChainRef.current.then(() => {
+        const fc = created;
+        created = null;
+        if (!fc) return;
+        fabricRef.current = null;
+        sharedFabricRef.current = null;
+        docBgRef.current = null;
+        setFabricReady(false);
+        return fc.dispose().catch(() => {/* already disposed */});
+      });
+    };
   }, []);
 
 
@@ -730,7 +742,7 @@ export default function CanvasArea() {
       fc.sendObjectToBack(bgRect);
     }
     fc.renderAll();
-  }, [zoom, doc.width, doc.height]);
+  }, [zoom, doc.width, doc.height, fabricReady]);
 
   useEffect(() => {
     const bgRect = docBgRef.current;
@@ -738,7 +750,7 @@ export default function CanvasArea() {
     if (!bgRect || !fc) return;
     bgRect.set({ fill: doc.background });
     fc.renderAll();
-  }, [doc.background]);
+  }, [doc.background, fabricReady]);
 
 
 
