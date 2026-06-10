@@ -539,3 +539,8 @@ export const useStore = create<AppState>()(
     }),
   }))
 );
+
+// Expose the store in dev builds for debugging and E2E testing.
+if (import.meta.env.DEV && typeof window !== 'undefined') {
+  (window as unknown as { __store?: typeof useStore }).__store = useStore;
+}

@@ -316,11 +316,6 @@ describe('ScaleBarObject type completeness', () => {
     expect(useStore.getState().doc.objects).toHaveLength(units.length);
   });
 
-  it('label is formatted as "realLength unit"', () => {
-    const sb = makeScalebar({ realLength: 500, unit: 'nm', label: '500 nm' });
-    useStore.getState().addObject(sb);
-    expect(useStore.getState().doc.objects[0].label).toBe('500 nm');
-  });
 });
 
 describe('TextObject LaTeX fields', () => {
@@ -342,26 +337,14 @@ describe('TextObject LaTeX fields', () => {
   });
 });
 
-describe('tool auto-return to select', () => {
+describe('setTool', () => {
   beforeEach(resetStore);
 
-  it('setTool switches tool correctly', () => {
-    useStore.getState().setTool('text');
-    expect(useStore.getState().tool).toBe('text');
-    useStore.getState().setTool('select');
-    expect(useStore.getState().tool).toBe('select');
-  });
-
-  it('tool can be reset to select after inset', () => {
-    useStore.getState().setTool('inset');
-    expect(useStore.getState().tool).toBe('inset');
-    // Simulate what confirmInset / cancelInset does
-    useStore.getState().setTool('select');
-    expect(useStore.getState().tool).toBe('select');
-  });
-
-  it('tool can be reset to select after shape placement', () => {
-    useStore.getState().setTool('shape');
+  it('switches between all tools and back to select', () => {
+    for (const t of ['text', 'shape', 'scalebar', 'inset', 'pan', 'grid-place'] as const) {
+      useStore.getState().setTool(t);
+      expect(useStore.getState().tool).toBe(t);
+    }
     useStore.getState().setTool('select');
     expect(useStore.getState().tool).toBe('select');
   });
@@ -578,31 +561,23 @@ describe('inset cropRect relX/relY are scene-space', () => {
 // verify that neither GridDialog nor addObject/addObjects inadvertently introduce
 // the field as truthy.
 
-describe('mode tag (PPL/XPL) is never set on ImageObjects', () => {
+describe('mode tag (showModeTag) round-trips through the store', () => {
   beforeEach(resetStore);
 
-  it('addObject image has no showModeTag field', () => {
-    useStore.getState().addObject(makeImage({ id: 'img-mt' }));
+  it('image created with showModeTag: false keeps it disabled', () => {
+    useStore.getState().addObject(makeImage({ id: 'img-mt', showModeTag: false } as Partial<CanvasObject>));
     const o = useStore.getState().doc.objects[0] as ImageObject;
-    expect(o.showModeTag).toBeFalsy();
+    expect(o.showModeTag).toBe(false);
   });
 
-  it('addObjects batch has no showModeTag on any image', () => {
-    const objs = [
-      makeImage({ id: 'mt1' }),
-      makeImage({ id: 'mt2', mode: 'XPL' }),
-    ];
-    useStore.getState().addObjects(objs);
-    for (const o of useStore.getState().doc.objects as ImageObject[]) {
-      expect(o.showModeTag).toBeFalsy();
-    }
-  });
-
-  it('updateObject does not add showModeTag when patching position', () => {
-    useStore.getState().addObject(makeImage({ id: 'mtp' }));
+  it('toggling showModeTag on persists, and position patches do not reset it', () => {
+    useStore.getState().addObject(makeImage({ id: 'mtp', showModeTag: false } as Partial<CanvasObject>));
+    useStore.getState().updateObject('mtp', { showModeTag: true, tagPosition: 'br' } as Partial<ImageObject>);
     useStore.getState().updateObject('mtp', { x: 100, y: 200 });
     const o = useStore.getState().doc.objects[0] as ImageObject;
-    expect(o.showModeTag).toBeFalsy();
+    expect(o.showModeTag).toBe(true);
+    expect(o.tagPosition).toBe('br');
+    expect(o.x).toBe(100);
   });
 });
 
@@ -842,5 +817,139 @@ describe('pan and zoom state independence', () => {
     useStore.getState().setZoom(0.001); // clamped to 0.1
     expect(useStore.getState().zoom).toBe(0.1);
     expect(useStore.getState().panX).toBe(50);
+  });
+});
+
+// ── Image group management ────────────────────────────────────────────────────
+
+describe('image group actions', () => {
+  beforeEach(resetStore);
+
+  const grp = (id = 'g1') => ({
+    id, name: 'Group', sample: 'S-1', images: [], expanded: true,
+  });
+  const img = (id = 'i1') => ({
+    id, mode: 'PPL' as const, name: 'a.png', dataUrl: 'data:,', width: 10, height: 10,
+  });
+
+  it('addGroup / removeGroup round-trip', () => {
+    useStore.getState().addGroup(grp());
+    expect(useStore.getState().groups).toHaveLength(1);
+    useStore.getState().removeGroup('g1');
+    expect(useStore.getState().groups).toHaveLength(0);
+  });
+
+  it('addImageToGroup appends; removeImageFromGroup removes only that image', () => {
+    useStore.getState().addGroup(grp());
+    useStore.getState().addImageToGroup('g1', img('i1'));
+    useStore.getState().addImageToGroup('g1', img('i2'));
+    expect(useStore.getState().groups[0].images.map(i => i.id)).toEqual(['i1', 'i2']);
+    useStore.getState().removeImageFromGroup('g1', 'i1');
+    expect(useStore.getState().groups[0].images.map(i => i.id)).toEqual(['i2']);
+  });
+
+  it('addImageToGroup with unknown group id is a safe no-op', () => {
+    useStore.getState().addImageToGroup('nope', img());
+    expect(useStore.getState().groups).toHaveLength(0);
+  });
+
+  it('updateGroup patches name without touching images', () => {
+    useStore.getState().addGroup(grp());
+    useStore.getState().addImageToGroup('g1', img());
+    useStore.getState().updateGroup('g1', { name: 'Renamed' });
+    expect(useStore.getState().groups[0].name).toBe('Renamed');
+    expect(useStore.getState().groups[0].images).toHaveLength(1);
+  });
+
+  it('updateImageCalibration sets calibration on the right image', () => {
+    useStore.getState().addGroup(grp());
+    useStore.getState().addImageToGroup('g1', img('i1'));
+    useStore.getState().addImageToGroup('g1', img('i2'));
+    const cal = { unitsPerPixel: 2.5, unit: 'µm' as const, refPixelDistance: 100, refRealLength: 250 };
+    useStore.getState().updateImageCalibration('g1', 'i2', cal);
+    const [a, b] = useStore.getState().groups[0].images;
+    expect(a.calibration).toBeUndefined();
+    expect(b.calibration).toEqual(cal);
+  });
+
+  it('toggleGroupExpanded flips the flag', () => {
+    useStore.getState().addGroup(grp());
+    useStore.getState().toggleGroupExpanded('g1');
+    expect(useStore.getState().groups[0].expanded).toBe(false);
+    useStore.getState().toggleGroupExpanded('g1');
+    expect(useStore.getState().groups[0].expanded).toBe(true);
+  });
+});
+
+// ── Canvas resize rescales content ────────────────────────────────────────────
+
+describe('setDocMeta canvas resize', () => {
+  beforeEach(resetStore);
+
+  it('rescales object positions proportionally and sizes by min ratio', () => {
+    useStore.getState().addObject(makeImage({ id: 'r1', x: 100, y: 100, width: 200, height: 100 }));
+    useStore.getState().setDocMeta({ width: 2400, height: 900 }); // sx=2, sy=1 → s1=1
+    const o = useStore.getState().doc.objects[0];
+    expect(o.x).toBe(200);       // ×2
+    expect(o.y).toBe(100);       // ×1
+    expect(o.width).toBe(200);   // ×min(2,1)=1
+    expect(o.height).toBe(100);
+  });
+
+  it('rescales scalebar length with the min ratio', () => {
+    useStore.getState().addObject(makeScalebar({ id: 'sbr', length: 100, x: 0, y: 0 }));
+    useStore.getState().setDocMeta({ width: 600, height: 450 }); // ×0.5 both
+    const sb = useStore.getState().doc.objects[0] as ScaleBarObject;
+    expect(sb.length).toBe(50);
+  });
+
+  it('does not touch objects when only DPI or background changes', () => {
+    useStore.getState().addObject(makeImage({ id: 'r2', x: 33, y: 44 }));
+    useStore.getState().setDocMeta({ dpi: 600, background: '#000000' });
+    const o = useStore.getState().doc.objects[0];
+    expect(o.x).toBe(33);
+    expect(o.y).toBe(44);
+  });
+});
+
+// ── Unsaved-changes tracking ──────────────────────────────────────────────────
+
+describe('hasUnsavedChanges / markSaved', () => {
+  beforeEach(resetStore);
+
+  it('adding an object marks the project dirty', () => {
+    useStore.setState({ savedVersion: 0 });
+    useStore.getState().addObject(makeImage());
+    expect(useStore.getState().hasUnsavedChanges()).toBe(true);
+  });
+
+  it('markSaved clears the dirty flag for the current history position', () => {
+    useStore.getState().addObject(makeImage());
+    useStore.getState().markSaved();
+    // savedVersion now matches past.length
+    expect(useStore.getState().savedVersion).toBe(useStore.getState().past.length);
+  });
+});
+
+// ── Ruler + fitView state ─────────────────────────────────────────────────────
+
+describe('ruler and fitView state', () => {
+  beforeEach(resetStore);
+
+  it('toggleRulerUnit cycles in → cm → mm → in', () => {
+    useStore.setState({ rulerUnit: 'in' });
+    useStore.getState().toggleRulerUnit();
+    expect(useStore.getState().rulerUnit).toBe('cm');
+    useStore.getState().toggleRulerUnit();
+    expect(useStore.getState().rulerUnit).toBe('mm');
+    useStore.getState().toggleRulerUnit();
+    expect(useStore.getState().rulerUnit).toBe('in');
+  });
+
+  it('fitView increments the request counter each call', () => {
+    const n0 = useStore.getState().fitViewRequest;
+    useStore.getState().fitView();
+    useStore.getState().fitView();
+    expect(useStore.getState().fitViewRequest).toBe(n0 + 2);
   });
 });

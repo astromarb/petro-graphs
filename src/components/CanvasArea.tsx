@@ -18,6 +18,13 @@ import { sharedFabricRef } from '../fabricRef';
 fabric.FabricObject.ownDefaults.originX = 'left';
 fabric.FabricObject.ownDefaults.originY = 'top';
 
+// When the sync effect tears down a Fabric object only to rebuild it (LaTeX
+// content/fontSize/color change, scale bar geometry change), removing the
+// active object fires selection:cleared — which would null the store selection
+// and close the properties panel mid-edit. This flag suppresses that handler
+// during programmatic rebuilds; the rebuilt object is re-selected afterwards.
+let suppressSelectionClear = false;
+
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 function borderToDash(style: BorderStyle['style'], w: number): number[] {
@@ -285,6 +292,9 @@ export default function CanvasArea() {
   // Canvas-pixel position of doc (0,0) — kept in sync with the Fabric viewport translation
   // so the page-boundary shadow and rulers always match where the document is rendered.
   const [docOriginPx, setDocOriginPx] = useState({ x: OVERFLOW_PAD, y: OVERFLOW_PAD });
+  // Container holding the canvas + rulers + page shadow; pan translates this
+  // element so the document and its chrome move together without clipping.
+  const canvasBoxRef = useRef<HTMLDivElement>(null);
   // Smart guide lines shown during drag: screen-pixel coordinates relative to canvas div
   const [guides, setGuides] = useState<{ type: 'v' | 'h'; pos: number }[]>([]);
   const setGuidesRef = useRef(setGuides);
@@ -362,7 +372,10 @@ export default function CanvasArea() {
         const sel = fc.getActiveObject() as fabric.FabricObject & { storeId?: string };
         if (sel?.storeId) setSelectedIdRef.current(sel.storeId);
       });
-      fc.on('selection:cleared', () => setSelectedIdRef.current(null));
+      fc.on('selection:cleared', () => {
+        if (suppressSelectionClear) return; // programmatic rebuild — keep selection
+        setSelectedIdRef.current(null);
+      });
   
       fc.on('object:modified', (e) => {
         setGuidesRef.current([]);
@@ -394,13 +407,42 @@ export default function CanvasArea() {
           return;
         }
 
+        const newW = (fObj.width  ?? 1) * (fObj.scaleX ?? 1);
+        const newH = (fObj.height ?? 1) * (fObj.scaleY ?? 1);
+        const newX = fObj.left ?? 0;
+        const newY = fObj.top  ?? 0;
         useStore.getState().updateObject(fObj.storeId, {
-          x: fObj.left ?? 0,
-          y: fObj.top  ?? 0,
-          width:  (fObj.width  ?? 1) * (fObj.scaleX ?? 1),
-          height: (fObj.height ?? 1) * (fObj.scaleY ?? 1),
+          x: newX, y: newY, width: newW, height: newH,
           rotation: fObj.angle ?? 0,
         });
+
+        // Images: rescale any attached scale bars so they keep representing the
+        // same real-world length at the image's new on-canvas magnification.
+        if (storeObj?.type === 'image' && storeObj.width > 0 && storeObj.height > 0) {
+          const ratioX = newW / storeObj.width;
+          const ratioY = newH / storeObj.height;
+          if (Math.abs(ratioX - 1) > 1e-3 || Math.abs(ratioY - 1) > 1e-3) {
+            const { doc: sd2, updateObject } = useStore.getState();
+            sd2.objects.forEach(o => {
+              if (o.type !== 'scalebar') return;
+              const sb = o as ScaleBarObject;
+              if (sb.parentImageId !== storeObj.id) return;
+              const newLen = Math.max(1, Math.round(sb.length * ratioX));
+              updateObject(sb.id, {
+                length: newLen,
+                width:  newLen,
+                // metersPerCanvasPx shrinks as the image grows: same real length
+                // now spans more canvas pixels. realLength and label stay as-is.
+                metersPerCanvasPx: sb.metersPerCanvasPx
+                  ? sb.metersPerCanvasPx / ratioX
+                  : undefined,
+                // Keep the bar pinned to the same relative spot on the image
+                x: newX + (sb.x - storeObj.x) * ratioX,
+                y: newY + (sb.y - storeObj.y) * ratioY,
+              });
+            });
+          }
+        }
       });
   
       // Keep mode tags tracking their image live during drag (before store commits).
@@ -687,7 +729,9 @@ export default function CanvasArea() {
             content: 'Label', isLatex: false,
             x: cx, y: cy, width: 200, height: 40, rotation: 0,
             locked: false, visible: true, label: 'Text',
-            fontSize: 16, color: '#000000', fontWeight: 'normal', align: 'left',
+            // 16 pt converted to canvas pixels at the document's DPI
+            fontSize: ptToPx(16, state.doc.dpi),
+            color: '#000000', fontWeight: 'normal', align: 'left',
           });
           // Auto-return to select so next click selects rather than places
           setToolRef.current('select');
@@ -734,6 +778,7 @@ export default function CanvasArea() {
     if (prev.w === doc.width && prev.h === doc.height) return;
     prevDocSizeRef.current = { w: doc.width, h: doc.height };
     panSceneRef.current = { x: 0, y: 0 }; // reset pan when doc resizes or on first load
+    if (canvasBoxRef.current) canvasBoxRef.current.style.transform = '';
     const wrap = wrapRef.current;
     if (!wrap) return;
     const padded = 0.92; // leave 8% margin
@@ -748,6 +793,8 @@ export default function CanvasArea() {
   useEffect(() => {
     if (fitViewRequest === 0) return;
     panSceneRef.current = { x: 0, y: 0 }; // center the document when fitting
+    if (canvasBoxRef.current) canvasBoxRef.current.style.transform = '';
+    fabricRef.current?.calcOffset();
     const wrap = wrapRef.current;
     if (!wrap) return;
     const padded = 0.92;
@@ -769,22 +816,27 @@ export default function CanvasArea() {
     const fc    = fabricRef.current;
     const bgRect = docBgRef.current;
     if (!fc) return;
-    // Derive canvas-pixel translation from scene-space pan so the user's pan
-    // position is preserved when zoom changes (panSceneRef holds the offset in
-    // scene units; multiplying by zoom gives the canvas-pixel displacement).
-    const newTx = OVERFLOW_PAD + panSceneRef.current.x * zoom;
-    const newTy = OVERFLOW_PAD + panSceneRef.current.y * zoom;
     fc.setDimensions({
       width:  Math.round(doc.width  * zoom) + 2 * OVERFLOW_PAD,
       height: Math.round(doc.height * zoom) + 2 * OVERFLOW_PAD,
     });
-    fc.setViewportTransform([zoom, 0, 0, zoom, newTx, newTy]);
+    fc.setViewportTransform([zoom, 0, 0, zoom, OVERFLOW_PAD, OVERFLOW_PAD]);
     if (bgRect) {
       bgRect.set({ width: doc.width, height: doc.height });
       fc.sendObjectToBack(bgRect);
     }
     fc.renderAll();
-    setDocOriginPx({ x: newTx, y: newTy });
+    // Pan lives on the container element (CSS translate), not the viewport;
+    // re-derive the pixel offset from scene-space pan at the new zoom so the
+    // panned position is preserved across zoom changes.
+    const box = canvasBoxRef.current;
+    if (box) {
+      const tx = panSceneRef.current.x * zoom;
+      const ty = panSceneRef.current.y * zoom;
+      box.style.transform = (tx || ty) ? `translate(${tx}px, ${ty}px)` : '';
+      fc.calcOffset();
+    }
+    setDocOriginPx({ x: OVERFLOW_PAD, y: OVERFLOW_PAD });
   }, [zoom, doc.width, doc.height, fabricReady]);
 
   useEffect(() => {
@@ -846,7 +898,8 @@ export default function CanvasArea() {
     const onMove = (e: MouseEvent) => {
       if (!isPanning.current) return;
       const fc = fabricRef.current;
-      if (!fc) return;
+      const box = canvasBoxRef.current;
+      if (!fc || !box) return;
       const dx = e.clientX - lastPan.current.x;
       const dy = e.clientY - lastPan.current.y;
       lastPan.current = { x: e.clientX, y: e.clientY };
@@ -855,12 +908,15 @@ export default function CanvasArea() {
       const z = zoomRef.current;
       panSceneRef.current.x += dx / z;
       panSceneRef.current.y += dy / z;
-      const newTx = OVERFLOW_PAD + panSceneRef.current.x * z;
-      const newTy = OVERFLOW_PAD + panSceneRef.current.y * z;
-      fc.setViewportTransform([z, 0, 0, z, newTx, newTy]);
-      fc.renderAll();
-      setDocOriginPx({ x: newTx, y: newTy });
-      setPan(-newTx, -newTy);
+      // Pan by translating the whole canvas container (canvas + rulers + shadow)
+      // rather than shifting the Fabric viewport — the canvas element is sized
+      // exactly to the document, so a viewport shift would clip content at the
+      // element edge (document "escaping" its own border).
+      const tx = panSceneRef.current.x * z;
+      const ty = panSceneRef.current.y * z;
+      box.style.transform = `translate(${tx}px, ${ty}px)`;
+      fc.calcOffset(); // element moved — refresh Fabric's cached pointer offset
+      setPan(-tx, -ty);
     };
     const onUp = (e: MouseEvent) => {
       if (!isPanning.current) return;
@@ -979,7 +1035,9 @@ export default function CanvasArea() {
           const o = obj as TextObject;
           const newKey = `${o.content}||${o.fontSize}||${o.color}`;
           if (existing._latexKey !== newKey) {
+            suppressSelectionClear = true;
             fc.remove(existing);
+            suppressSelectionClear = false;
             objMapRef.current.delete(obj.id);
             createFabricObject(obj, freshGroups, fc, objMapRef.current);
             return;
@@ -993,8 +1051,10 @@ export default function CanvasArea() {
           const newKey = `${o.length}|${o.thickness}|${o.color}|${o.labelColor}|${o.fontSize}|${o.realLength}|${o.unit}`;
           const sbExisting = existing as typeof existing & { _sbKey?: string; _labelFab?: fabric.FabricImage };
           if (sbExisting._sbKey !== newKey) {
+            suppressSelectionClear = true;
             if (sbExisting._labelFab) fc.remove(sbExisting._labelFab);
             fc.remove(existing);
+            suppressSelectionClear = false;
             objMapRef.current.delete(obj.id);
             createFabricObject(obj, freshGroups, fc, objMapRef.current);
             return;
@@ -1207,6 +1267,7 @@ export default function CanvasArea() {
         color: '#ffffff', labelColor: '#ffffff', thickness: 4,
         fontSize: ptToPx(8, useStore.getState().doc.dpi),
         metersPerCanvasPx,
+        parentImageId: insetObj.id,
       };
       addObject(sb);
     }
@@ -1323,7 +1384,7 @@ export default function CanvasArea() {
       )}
 
       {/* Fabric canvas — sized exactly to the document boundary */}
-      <div style={{ position: 'relative', flexShrink: 0 }}>
+      <div ref={canvasBoxRef} style={{ position: 'relative', flexShrink: 0 }}>
         <canvas ref={canvasElRef} />
 
         {/* Page-boundary shadow: outlines the document area; tracks pan via docOriginPx */}
@@ -1465,8 +1526,11 @@ function createFabricObject(
               height: Math.round((fImg.height ?? 30) * RETINA),
             });
           }
+          // Use live coords — the object may have been moved while rendering
+          const livePos = useStore.getState().doc.objects.find(x => x.id === obj.id);
           fImg.set({
-            left: o.x, top: o.y, angle: o.rotation,
+            left: livePos?.x ?? o.x, top: livePos?.y ?? o.y,
+            angle: livePos?.rotation ?? o.rotation,
             scaleX: scale, scaleY: scale,
             selectable: true, evented: true,
           });
@@ -1475,6 +1539,27 @@ function createFabricObject(
           fImg._latexKey  = `${o.content}||${o.fontSize}||${o.color}`;
           fc.add(fImg);
           map.set(obj.id, fImg);
+
+          // The user may have kept typing while this render was in flight —
+          // the sync effect skips sentinel entries, so those edits produced no
+          // rebuild. Compare against the live store state and re-render now if
+          // the content/size/color moved on without us.
+          const liveTxt = useStore.getState().doc.objects
+            .find(x => x.id === obj.id) as TextObject | undefined;
+          if (liveTxt?.isLatex) {
+            const liveKey = `${liveTxt.content}||${liveTxt.fontSize}||${liveTxt.color}`;
+            if (liveKey !== fImg._latexKey) {
+              fc.remove(fImg);
+              map.delete(obj.id);
+              createFabricObject(liveTxt, useStore.getState().groups, fc, map);
+              return;
+            }
+          }
+
+          // Restore selection if this object was selected when the rebuild started
+          if (useStore.getState().selectedId === obj.id) {
+            fc.setActiveObject(fImg);
+          }
           fc.renderAll();
         })
         .catch(() => {
@@ -1565,6 +1650,9 @@ function createFabricObject(
     (grp as typeof grp & { storeId: string }).storeId = obj.id;
     fc.add(grp);
     map.set(obj.id, grp);
+    // Re-select after a rebuild (e.g. resize relabeling) so the properties
+    // panel stays open while the user keeps adjusting.
+    if (useStore.getState().selectedId === obj.id) fc.setActiveObject(grp);
 
     // Render label as LaTeX image, add below bar, and attach ref to group so
     // syncFabricProps can reposition it when the scale bar is moved.
