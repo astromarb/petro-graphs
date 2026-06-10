@@ -2,7 +2,9 @@
 <p align="center"> <img width="125" height="125" alt="image" src="https://github.com/user-attachments/assets/45decd6a-1a68-43d3-a572-47fee3dcc20d" /> </p>
 
 **Desktop application for composing, annotating, and exporting geological photomicrograph figures, purpose-built for cross-polarized and plane-polarized light (XPL/PPL) thin-section photography.**
+
 ---
+
 ### Download and install
 | Platform | File | Notes |
 |---|---|---|
@@ -16,6 +18,8 @@
 - **Linux:** Requires a Wayland or X11 desktop environment with WebKit2GTK 4.1.
 
 > Built with Tauri 2, Rust, React 19, TypeScript, and Fabric.js 7.
+---
+
 <img width="1336" height="824" alt="image" src="https://github.com/user-attachments/assets/e1119134-ed67-4d11-9ed1-887ca87abce2" />
 
 ---
