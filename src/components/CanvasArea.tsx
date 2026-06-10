@@ -283,6 +283,10 @@ export default function CanvasArea() {
   // Guard: prevent double-placement from mousedown+mouseup both firing
   const justPlacedRef = useRef(false);
 
+  // ── Horizontal line drag-draw state ───────────────────────────────────
+  const lineDrawRef    = useRef<{ x1: number; y: number; x2: number } | null>(null);
+  const linePreviewRef = useRef<fabric.Line | null>(null);
+
   // Keep setTool in a ref so fabric event handlers can call it
   const setToolRef = useRef(setTool);
   useEffect(() => { setToolRef.current = setTool; }, [setTool]);
@@ -573,6 +577,64 @@ export default function CanvasArea() {
         setToolRef.current('select');
       });
   
+      // ── Horizontal line tool: click-and-drag to draw a rule ───────────
+      // The y coordinate is locked to the mousedown point, so the result is
+      // always perfectly horizontal — useful for section dividers and
+      // APPENDIX-style headers.
+      fc.on('mouse:down', (options) => {
+        if (toolRef.current !== 'line') return;
+        const pt = getScenePt(fc, options);
+        if (!pt) return;
+        lineDrawRef.current = { x1: pt.x, y: pt.y, x2: pt.x };
+        const preview = new fabric.Line([pt.x, pt.y, pt.x, pt.y], {
+          stroke: '#1a1a1a', strokeWidth: 2,
+          selectable: false, evented: false,
+          strokeLineCap: 'round',
+        });
+        linePreviewRef.current = preview;
+        fc.add(preview);
+        fc.renderAll();
+      });
+
+      fc.on('mouse:move', (options) => {
+        if (toolRef.current !== 'line') return;
+        const d = lineDrawRef.current;
+        const preview = linePreviewRef.current;
+        if (!d || !preview) return;
+        const pt = getScenePt(fc, options);
+        if (!pt) return;
+        d.x2 = pt.x;
+        preview.set({ x2: pt.x, y2: d.y }); // y locked → horizontal
+        fc.renderAll();
+      });
+
+      fc.on('mouse:up', () => {
+        if (toolRef.current !== 'line') return;
+        const d = lineDrawRef.current;
+        lineDrawRef.current = null;
+        if (linePreviewRef.current) {
+          fc.remove(linePreviewRef.current);
+          linePreviewRef.current = null;
+          fc.renderAll();
+        }
+        if (!d) return;
+        const len = Math.abs(d.x2 - d.x1);
+        if (len < 5) return; // ignore accidental clicks
+        const thickness = 2;
+        const newId = nanoid();
+        useStore.getState().addObject({
+          id: newId, type: 'shape', shape: 'line',
+          x: Math.round(Math.min(d.x1, d.x2)),
+          y: Math.round(d.y - thickness / 2),
+          width: Math.round(len), height: thickness,
+          rotation: 0, locked: false, visible: true, label: 'Line',
+          fill: '#1a1a1a', fillOpacity: 1,
+          border: { color: '#1a1a1a', width: 0, style: 'none', radius: 0 },
+        });
+        setToolRef.current('select');
+        setTimeout(() => setSelectedIdRef.current(newId), 50);
+      });
+
       // ── mouse:move — update grid-place rect preview ───────────────────
       fc.on('mouse:move', (options) => {
         if (toolRef.current === 'grid-place' && gridDrawRef.current && gridRectPreviewRef.current) {
@@ -856,7 +918,7 @@ export default function CanvasArea() {
     if (tool === 'pan') {
       fc.defaultCursor = 'grab';
       fc.selection = false;
-    } else if (['text', 'shape', 'scalebar', 'inset', 'grid-place'].includes(tool)) {
+    } else if (['text', 'shape', 'line', 'scalebar', 'inset', 'grid-place'].includes(tool)) {
       fc.defaultCursor = 'crosshair';
       fc.selection = false;
     } else {
@@ -966,7 +1028,7 @@ export default function CanvasArea() {
       const fc = fabricRef.current;
       if (!fc) return;
       if      (restore === 'pan')   { fc.defaultCursor = 'grab'; fc.selection = false; }
-      else if (['text','shape','scalebar','inset','grid-place'].includes(restore))
+      else if (['text','shape','line','scalebar','inset','grid-place'].includes(restore))
                                     { fc.defaultCursor = 'crosshair'; fc.selection = false; }
       else                          { fc.defaultCursor = 'default'; fc.selection = true; }
       fc.getObjects().forEach(o => {
@@ -1383,6 +1445,19 @@ export default function CanvasArea() {
         </div>
       )}
 
+      {/* Line tool prompt */}
+      {tool === 'line' && (
+        <div style={{
+          position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
+          background: 'var(--bg-overlay)', border: '1px solid var(--border)',
+          borderRadius: 8, padding: '7px 14px', zIndex: 20, pointerEvents: 'none',
+        }}>
+          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            Click and drag to draw a horizontal line
+          </span>
+        </div>
+      )}
+
       {/* Fabric canvas — sized exactly to the document boundary */}
       <div ref={canvasBoxRef} style={{ position: 'relative', flexShrink: 0 }}>
         <canvas ref={canvasElRef} />
@@ -1596,7 +1671,18 @@ function createFabricObject(
   if (obj.type === 'shape') {
     const o = obj as ShapeObject;
     const fill = o.fillOpacity === 0 ? 'transparent' : o.fill;
-    if (o.shape === 'rect') {
+    if (o.shape === 'line') {
+      // Horizontal rule: a filled bar `height` px thick. The fill IS the
+      // line colour; no stroke, so applyBorder is skipped below.
+      fObj = new fabric.Rect({
+        left: o.x, top: o.y, width: o.width, height: o.height,
+        fill: o.fill, angle: o.rotation,
+        stroke: '', strokeWidth: 0,
+      });
+      // Length and thickness adjust via the side handles; corner handles
+      // would skew both at once, which is rarely wanted for a rule.
+      fObj.setControlsVisibility({ tl: false, tr: false, bl: false, br: false });
+    } else if (o.shape === 'rect') {
       fObj = new fabric.Rect({
         left: o.x, top: o.y, width: o.width, height: o.height,
         fill, angle: o.rotation,
@@ -1608,7 +1694,7 @@ function createFabricObject(
         fill, angle: o.rotation,
       });
     }
-    if (fObj) applyBorder(fObj, (obj as ShapeObject).border);
+    if (fObj && o.shape !== 'line') applyBorder(fObj, o.border);
   }
 
   if (obj.type === 'scalebar') {

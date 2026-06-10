@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import {
-  MousePointer2, Type, Square, Ruler, Hand, Crop,
+  MousePointer2, Type, Square, Ruler, Hand, Crop, Minus,
   Download, Layers, Info, ZoomIn, ZoomOut, Maximize2,
   Undo2, Redo2, FolderOpen, Save, LayoutGrid,
 } from 'lucide-react';
@@ -19,6 +19,7 @@ const TOOLS: { id: Tool; icon: React.ReactNode; name: string; label: string; sep
   { id: 'pan',      icon: <Hand size={15} />,           name: 'Pan',      label: 'Pan (H) · Space to temp-pan' },
   { id: 'text',     icon: <Type size={15} />,           name: 'Text',     label: 'Text / LaTeX (T)', sep: true },
   { id: 'shape',    icon: <Square size={15} />,          name: 'Shape',    label: 'Shape (S)' },
+  { id: 'line',     icon: <Minus size={15} />,            name: 'Line',     label: 'Horizontal Line (L) — click and drag to draw' },
   { id: 'scalebar', icon: <Ruler size={15} />,           name: 'Scale Bar', label: 'Scale Bar (B) — click a calibrated image to place' },
   { id: 'inset',    icon: <Crop size={15} />,            name: 'Inset',    label: 'Inset (I)' },
 ];
@@ -132,7 +133,7 @@ export default function Topbar() {
       <div className="topbar">
         {/* Logo */}
         <div className="topbar-logo">
-          <div className="logo-mark">PG</div>
+          <img src="/favicon.svg" alt="Petro Graphs" className="logo-mark" />
           <div>
             <div className="topbar-title">Petro Graphs</div>
             <div className="topbar-sub">Version {APP_VERSION}</div>
