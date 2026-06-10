@@ -1,6 +1,6 @@
 [package]
 name = "petro-graphs"
-version = "0.1.0"
+version = "0.1.6"
 description = "Petro Graphs — scientific figure editor for geological photomicrographs"
 authors = ["Marvin Alejandro Lopez Acevedo"]
 license = "MIT"
