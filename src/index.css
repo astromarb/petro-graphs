@@ -465,13 +465,12 @@ input[type="range"]::-webkit-slider-thumb {
   margin-right: 8px;
 }
 
-/* Gold-to-teal gradient: survey field warmth → XPL interference (hint of A) */
+/* App logo — the same thin-section "PG" mark used for the favicon and the
+   Tauri build icons (src-tauri/icons), so branding matches across builds. */
 .logo-mark {
-  width: 24px; height: 24px;
-  background: linear-gradient(135deg, var(--accent) 0%, var(--rock-teal) 100%);
-  border-radius: 5px;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 11px; font-weight: 700; color: #0d0b08; letter-spacing: -0.5px;
+  width: 32px; height: 32px;
+  border-radius: 6px;
+  display: block;
 }
 
 /* Literata italic — field survey / geological survey report character */
