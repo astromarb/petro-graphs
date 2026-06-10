@@ -827,8 +827,18 @@ export default function CanvasArea() {
     const el = wrapRef.current;
     if (!el) return;
 
+    // Middle-mouse pan: tracks whether pan was initiated by middle button so
+    // we can restore the cursor without switching the active tool on release.
+    const midPan = { active: false, prevCursor: '' };
+
     const onDown = (e: MouseEvent) => {
-      if (toolRef.current !== 'pan') return;
+      const isMid = e.button === 1;
+      if (!isMid && toolRef.current !== 'pan') return;
+      if (isMid) {
+        e.preventDefault(); // suppress browser scroll-on-middle-click
+        midPan.active = true;
+        midPan.prevCursor = el.style.cursor;
+      }
       isPanning.current = true;
       lastPan.current = { x: e.clientX, y: e.clientY };
       el.style.cursor = 'grabbing';
@@ -852,16 +862,27 @@ export default function CanvasArea() {
       setDocOriginPx({ x: newTx, y: newTy });
       setPan(-newTx, -newTy);
     };
-    const onUp = () => {
+    const onUp = (e: MouseEvent) => {
+      if (!isPanning.current) return;
       isPanning.current = false;
-      el.style.cursor = toolRef.current === 'pan' ? 'grab' : 'default';
+      if (midPan.active && e.button === 1) {
+        midPan.active = false;
+        el.style.cursor = midPan.prevCursor;
+      } else {
+        el.style.cursor = toolRef.current === 'pan' ? 'grab' : 'default';
+      }
     };
 
+    // auxclick fires on middle-click release; prevent browser default (autoscroll)
+    const onAux = (e: MouseEvent) => { if (e.button === 1) e.preventDefault(); };
+
     el.addEventListener('mousedown', onDown);
+    el.addEventListener('auxclick', onAux);
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     return () => {
       el.removeEventListener('mousedown', onDown);
+      el.removeEventListener('auxclick', onAux);
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
