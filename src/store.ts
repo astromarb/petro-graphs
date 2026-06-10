@@ -5,7 +5,7 @@ import type {
   CanvasDoc, CanvasObject, ImageGroup, ThinSectionImage, Tool, InsetPair, ImageCalibration, CanvasSlot, PendingGrid,
 } from './types';
 
-export const MAX_CANVAS_SLOTS = 5;
+export const MAX_CANVAS_SLOTS = 10;
 
 // ── Persistence ────────────────────────────────────────────────────────────
 const IDB_KEY = 'petrofigure-state-v1';

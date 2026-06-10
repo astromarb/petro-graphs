@@ -586,8 +586,8 @@ describe('mode tag (showModeTag) round-trips through the store', () => {
 describe('multi-canvas slots', () => {
   beforeEach(resetStore);
 
-  it('MAX_CANVAS_SLOTS is 5', () => {
-    expect(MAX_CANVAS_SLOTS).toBe(5);
+  it('MAX_CANVAS_SLOTS is 10', () => {
+    expect(MAX_CANVAS_SLOTS).toBe(10);
   });
 
   it('openCanvasSlot returns "opened" and increments slot count', () => {
