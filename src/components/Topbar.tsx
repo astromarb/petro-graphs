@@ -12,6 +12,7 @@ import { sharedFabricRef } from '../fabricRef';
 import { isDesktop, saveProject, saveProjectAs, openProject } from '../fileOps';
 import { nanoid, niceScaleBar, UNIT_METERS, ptToPx } from '../utils';
 import type { ScaleBarObject, ImageObject } from '../types';
+import { version as APP_VERSION } from '../../package.json';
 
 const TOOLS: { id: Tool; icon: React.ReactNode; name: string; label: string; sep?: boolean }[] = [
   { id: 'select',   icon: <MousePointer2 size={15} />, name: 'Select',   label: 'Select (V)' },
@@ -133,7 +134,8 @@ export default function Topbar() {
         <div className="topbar-logo">
           <div className="logo-mark">PG</div>
           <div>
-            <div className="topbar-title">PetroGraphing</div>
+            <div className="topbar-title">Petro Graphs</div>
+            <div className="topbar-sub">Version {APP_VERSION}</div>
           </div>
         </div>
 
