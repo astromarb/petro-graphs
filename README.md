@@ -20,7 +20,8 @@
 > Built with Tauri 2, Rust, React 19, TypeScript, and Fabric.js 7.
 ---
 
-[<img width="1336" height="824" alt="image" src="https://github.com/user-attachments/assets/e1119134-ed67-4d11-9ed1-887ca87abce2" />](https://github.com/astromarb/petro-graphs/blob/claude/fervent-lamport-btINy/docs/hero.png?raw=true)
+https://github.com/astromarb/petro-graphs/blob/main/docs/hero.png?raw=true<img width="1336" height="824" alt="image" src="https://github.com/user-attachments/assets/058b47de-6084-4cf9-aacc-047af4665c56" />
+
 
 ---
 ## Running as a Desktop App
