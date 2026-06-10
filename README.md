@@ -1,4 +1,4 @@
-## Petro Graphs v0.1.6
+## Petro Graphs v0.1.6 [![PR Checks](https://github.com/astromarb/petro-graphs/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/astromarb/petro-graphs/actions/workflows/ci.yml)
 <p align="center"> <img width="125" height="125" alt="image" src="https://github.com/user-attachments/assets/45decd6a-1a68-43d3-a572-47fee3dcc20d" /> </p>
 
 **Desktop application for composing, annotating, and exporting geological photomicrograph figures, purpose-built for cross-polarized and plane-polarized light (XPL/PPL) thin-section photography.**
@@ -19,8 +19,8 @@
 
 > Built with Tauri 2, Rust, React 19, TypeScript, and Fabric.js 7.
 ---
+<img width="1336" height="824" alt="image" src="https://github.com/user-attachments/assets/058b47de-6084-4cf9-aacc-047af4665c56" />
 
-<img width="1336" height="824" alt="Petro Graphs — an open-source scientific figure/.pdf editor" src="docs/hero.png" />
 
 ---
 ## Running as a Desktop App
