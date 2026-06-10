@@ -886,14 +886,33 @@ describe('image group actions', () => {
 describe('setDocMeta canvas resize', () => {
   beforeEach(resetStore);
 
-  it('rescales object positions proportionally and sizes by min ratio', () => {
+  it('rescales positions per-axis and sizes by the geometric mean of the ratios', () => {
     useStore.getState().addObject(makeImage({ id: 'r1', x: 100, y: 100, width: 200, height: 100 }));
-    useStore.getState().setDocMeta({ width: 2400, height: 900 }); // sx=2, sy=1 → s1=1
+    useStore.getState().setDocMeta({ width: 2400, height: 900 }); // sx=2, sy=1 → s1=√2
     const o = useStore.getState().doc.objects[0];
-    expect(o.x).toBe(200);       // ×2
-    expect(o.y).toBe(100);       // ×1
-    expect(o.width).toBe(200);   // ×min(2,1)=1
-    expect(o.height).toBe(100);
+    expect(o.x).toBe(200);                       // ×2
+    expect(o.y).toBe(100);                       // ×1
+    expect(o.width).toBe(Math.round(200 * Math.SQRT2));
+    expect(o.height).toBe(Math.round(100 * Math.SQRT2));
+  });
+
+  it('swapping W and H does NOT change object sizes (orientation switch)', () => {
+    useStore.getState().addObject(makeImage({ id: 'sw', x: 200, y: 100, width: 300, height: 150 }));
+    useStore.getState().setDocMeta({ width: 900, height: 1200 }); // swap of 1200×900 → s1=1
+    const o = useStore.getState().doc.objects[0];
+    expect(o.width).toBe(300);
+    expect(o.height).toBe(150);
+  });
+
+  it('repeated flipOrientation never shrinks objects (regression)', () => {
+    useStore.getState().addObject(makeImage({ id: 'fl', x: 100, y: 100, width: 400, height: 300 }));
+    for (let i = 0; i < 6; i++) useStore.getState().flipOrientation();
+    const o = useStore.getState().doc.objects[0];
+    expect(o.width).toBe(400);
+    expect(o.height).toBe(300);
+    // even number of flips → canvas and positions back to start
+    expect(useStore.getState().doc.width).toBe(1200);
+    expect(o.x).toBe(100);
   });
 
   it('rescales scalebar length with the min ratio', () => {
@@ -951,5 +970,37 @@ describe('ruler and fitView state', () => {
     useStore.getState().fitView();
     useStore.getState().fitView();
     expect(useStore.getState().fitViewRequest).toBe(n0 + 2);
+  });
+});
+
+// ── Multi-selection move commit (grid snap-back regression) ───────────────────
+
+describe('batchUpdateObjects (multi-selection move commit)', () => {
+  beforeEach(resetStore);
+
+  it('applies every patch and stores the moved positions', () => {
+    useStore.getState().addObject(makeImage({ id: 'm1', x: 100, y: 100 }));
+    useStore.getState().addObject(makeImage({ id: 'm2', x: 300, y: 100 }));
+    useStore.getState().batchUpdateObjects([
+      { id: 'm1', patch: { x: 250, y: 220 } },
+      { id: 'm2', patch: { x: 450, y: 220 } },
+    ]);
+    const [a, b] = useStore.getState().doc.objects;
+    expect([a.x, a.y]).toEqual([250, 220]);
+    expect([b.x, b.y]).toEqual([450, 220]);
+  });
+
+  it('a whole multi-move is one undo step', () => {
+    useStore.getState().addObject(makeImage({ id: 'u1', x: 0, y: 0 }));
+    useStore.getState().addObject(makeImage({ id: 'u2', x: 50, y: 0 }));
+    const histBefore = useStore.getState().past.length;
+    useStore.getState().batchUpdateObjects([
+      { id: 'u1', patch: { x: 10, y: 10 } },
+      { id: 'u2', patch: { x: 60, y: 10 } },
+    ]);
+    expect(useStore.getState().past.length).toBe(histBefore + 1);
+    useStore.getState().undo();
+    const [a, b] = useStore.getState().doc.objects;
+    expect([a.x, b.x]).toEqual([0, 50]);
   });
 });

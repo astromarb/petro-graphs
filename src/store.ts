@@ -296,7 +296,12 @@ export const useStore = create<AppState>()(
       if ((newW !== oldW || newH !== oldH) && s.doc.objects.length > 0) {
         const sx = newW / oldW;
         const sy = newH / oldH;
-        const s1 = Math.min(sx, sy);
+        // Uniform size factor = geometric mean of the axis ratios. Unlike
+        // min(sx, sy) — which is < 1 for any aspect swap and so shrank
+        // objects on every orientation/size switch — this is exactly 1 for
+        // a W/H swap, equals the ratio for uniform resizes, and is fully
+        // reversible (resizing back restores original sizes).
+        const s1 = Math.sqrt(sx * sy);
         s.doc.objects.forEach(obj => {
           obj.x      = Math.round(obj.x      * sx);
           obj.y      = Math.round(obj.y      * sy);
@@ -449,13 +454,13 @@ export const useStore = create<AppState>()(
       const oldH = s.doc.height;
       s.doc.width  = oldH;
       s.doc.height = oldW;
-      const s1 = Math.min(oldH / oldW, oldW / oldH);
+      // Only positions remap to the swapped axes — object SIZES must not
+      // change on an orientation flip. (The previous min(aspect, 1/aspect)
+      // factor was always < 1, so every flip shrank objects geometrically
+      // toward zero.)
       s.doc.objects.forEach(obj => {
-        obj.x      = Math.round(obj.x      * (oldH / oldW));
-        obj.y      = Math.round(obj.y      * (oldW / oldH));
-        obj.width  = Math.round(obj.width  * s1);
-        obj.height = Math.round(obj.height * s1);
-        if (obj.type === 'scalebar') obj.length = Math.round(obj.length * s1);
+        obj.x = Math.round(obj.x * (oldH / oldW));
+        obj.y = Math.round(obj.y * (oldW / oldH));
       });
       persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
