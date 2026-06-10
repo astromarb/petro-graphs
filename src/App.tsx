@@ -13,7 +13,7 @@ import { isDesktop, saveProject, saveProjectAs, openProject } from './fileOps';
 import type { Tool } from './types';
 
 const KEY_TOOL_MAP: Record<string, Tool> = {
-  v: 'select', h: 'pan', t: 'text', s: 'shape', b: 'scalebar', i: 'inset',
+  v: 'select', h: 'pan', t: 'text', s: 'shape', l: 'line', b: 'scalebar', i: 'inset',
 };
 
 export default function App() {

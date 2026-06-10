@@ -2,23 +2,13 @@ import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
 import type {
-  CanvasDoc, CanvasObject, ImageGroup, ThinSectionImage, Tool, InsetPair, ImageCalibration,
+  CanvasDoc, CanvasObject, ImageGroup, ThinSectionImage, Tool, InsetPair, ImageCalibration, CanvasSlot, PendingGrid,
 } from './types';
 
-// ── Multi-canvas ───────────────────────────────────────────────────────────
 export const MAX_CANVAS_SLOTS = 10;
 
-export interface CanvasSlot {
-  id:      string;
-  doc:     CanvasDoc;
-  insets:  InsetPair[];
-  past:    { objects: CanvasObject[]; insets: InsetPair[] }[];
-  future:  { objects: CanvasObject[]; insets: InsetPair[] }[];
-}
-
 // ── Persistence ────────────────────────────────────────────────────────────
-const IDB_KEY = 'petrofigure-state-v2';
-const IDB_KEY_V1 = 'petrofigure-state-v1';
+const IDB_KEY = 'petrofigure-state-v1';
 
 export interface PersistedState {
   doc:    CanvasDoc;
@@ -26,9 +16,6 @@ export interface PersistedState {
   insets: InsetPair[];
   /** File format version for forward-compat */
   version?: number;
-  /** v2: all open canvases */
-  canvases?:      CanvasSlot[];
-  activeCanvasId?: string;
 }
 
 const CURRENT_VERSION = 1;
@@ -39,10 +26,10 @@ let _persistTimer: ReturnType<typeof setTimeout> | null = null;
 function persist(state: PersistedState) {
   if (typeof indexedDB === 'undefined') return; // jsdom / SSR guard
   if (_persistTimer) clearTimeout(_persistTimer);
-  // Don't JSON.parse/stringify here — that blocks on large image data; Immer state is frozen
+  const snapshot = JSON.parse(JSON.stringify(state));
   _persistTimer = setTimeout(() => {
     _persistTimer = null;
-    idbSet(IDB_KEY, JSON.parse(JSON.stringify(state))).catch(() => {/* quota/private mode */});
+    idbSet(IDB_KEY, snapshot).catch(() => {/* quota/private mode */});
   }, 400);
 }
 
@@ -50,10 +37,7 @@ function persist(state: PersistedState) {
 export async function loadPersistedState(): Promise<PersistedState | null> {
   try {
     const saved = await idbGet<PersistedState>(IDB_KEY);
-    if (saved) return saved;
-    // Migrate from v1 (single-canvas)
-    const v1 = await idbGet<PersistedState>(IDB_KEY_V1);
-    return v1 ?? null;
+    return saved ?? null;
   } catch {
     return null;
   }
@@ -61,12 +45,12 @@ export async function loadPersistedState(): Promise<PersistedState | null> {
 
 /** Download the current project as a .petrofig JSON file. */
 export function saveProjectFile() {
-  const state = useStore.getState();
-  const payload: PersistedState = buildPersist(state);
+  const { doc, groups, insets } = useStore.getState();
+  const payload: PersistedState = { doc, groups, insets, version: CURRENT_VERSION };
   const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
-  const safe = state.doc.title.replace(/[^a-z0-9_-]/gi, '_') || 'project';
+  const safe = doc.title.replace(/[^a-z0-9_-]/gi, '_') || 'project';
   a.href     = url;
   a.download = `${safe}.petrofig`;
   a.click();
@@ -203,50 +187,40 @@ export interface AppState {
   /** Swap canvas width ↔ height and reposition all objects proportionally */
   flipOrientation: () => void;
 
-  // ── Multi-canvas ─────────────────────────────────────────────────────────
-  canvases:       CanvasSlot[];
-  activeCanvasId: string;
-  addCanvas:      () => void;
-  removeCanvas:   (id: string) => void;
-  switchCanvas:   (id: string) => void;
-  renameCanvas:   (id: string, title: string) => void;
+  // ── Grid placement ────────────────────────────────────────────────────────
+  /** Set when GridDialog confirms; cleared by CanvasArea after placement. */
+  pendingGrid: PendingGrid | null;
+  setPendingGrid: (g: PendingGrid | null) => void;
+
+  // ── Multi-canvas slot management (up to MAX_CANVAS_SLOTS) ────────────────
+  /** All currently open canvas slots (at least 1 — the default slot). */
+  canvasSlots: CanvasSlot[];
+  /** ID of the slot currently displayed in the canvas area. */
+  activeSlotId: string;
+  /**
+   * Open a new empty canvas slot. Returns 'full' if MAX_CANVAS_SLOTS reached
+   * (caller should prompt user to close a slot first).
+   */
+  openCanvasSlot: () => 'opened' | 'full';
+  /** Close a canvas slot by id. Switches active slot if the closed one was active. */
+  closeCanvasSlot: (id: string) => void;
+  /** Make the slot with the given id the active canvas. NOT YET WIRED to CanvasArea. */
+  switchToCanvasSlot: (id: string) => void;
 }
 
-function makeDefaultDoc(id = 'doc-1', title = 'Untitled Figure'): CanvasDoc {
-  return {
-    id,
-    title,
-    width: 1200,
-    height: 900,
-    dpi: 300,
-    background: '#ffffff',
-    objects: [],
-    metadata: {
-      authors: '', affiliation: '', sampleInfo: '', locality: '', notes: '',
-      date: new Date().toISOString().slice(0, 10),
-    },
-  };
-}
-
-const defaultDoc = makeDefaultDoc();
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function buildPersist(s: any): PersistedState {
-  // Sync active canvas into the canvases array before persisting
-  const canvases: CanvasSlot[] = (s.canvases as CanvasSlot[]).map(c =>
-    c.id === s.activeCanvasId
-      ? { ...c, doc: s.doc as CanvasDoc, insets: s.insets as InsetPair[], past: s.past as Snapshot[], future: s.future as Snapshot[] }
-      : c
-  );
-  return {
-    doc: s.doc as CanvasDoc,
-    groups: s.groups as ImageGroup[],
-    insets: s.insets as InsetPair[],
-    version: CURRENT_VERSION,
-    canvases,
-    activeCanvasId: s.activeCanvasId as string,
-  };
-}
+const defaultDoc: CanvasDoc = {
+  id: 'doc-1',
+  title: 'Untitled Figure',
+  width: 1200,
+  height: 900,
+  dpi: 300,
+  background: '#ffffff',
+  objects: [],
+  metadata: {
+    authors: '', affiliation: '', sampleInfo: '', locality: '', notes: '',
+    date: new Date().toISOString().slice(0, 10),
+  },
+};
 
 export const useStore = create<AppState>()(
   immer((set) => ({
@@ -261,118 +235,39 @@ export const useStore = create<AppState>()(
       if (!g) return;
       const img = g.images.find(i => i.id === imageId);
       if (img) img.calibration = cal;
-      persist(buildPersist(s));
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
 
     rehydrate: (saved) => set((s) => {
+      // Merge doc to preserve any new fields added since the file was saved
+      Object.assign(s.doc, saved.doc);
+      // Guard against older file formats that may omit these arrays
+      if (!Array.isArray(s.doc.objects)) s.doc.objects = [];
       s.groups = (saved.groups ?? []) as typeof s.groups;
-
-      if (saved.canvases && saved.canvases.length > 0) {
-        // v2 format: restore multi-canvas state
-        s.canvases = saved.canvases as typeof s.canvases;
-        s.activeCanvasId = saved.activeCanvasId ?? saved.canvases[0].id;
-        const active = saved.canvases.find(c => c.id === s.activeCanvasId) ?? saved.canvases[0];
-        Object.assign(s.doc, active.doc);
-        if (!Array.isArray(s.doc.objects)) s.doc.objects = [];
-        s.insets  = (active.insets  ?? []) as typeof s.insets;
-        s.past    = (active.past    ?? []) as typeof s.past;
-        s.future  = (active.future  ?? []) as typeof s.future;
-      } else {
-        // v1 format: single canvas
-        Object.assign(s.doc, saved.doc);
-        if (!Array.isArray(s.doc.objects)) s.doc.objects = [];
-        s.insets = (saved.insets ?? []) as typeof s.insets;
-        s.canvases = [{ id: s.doc.id, doc: s.doc as CanvasDoc, insets: s.insets as InsetPair[], past: [], future: [] }];
-        s.activeCanvasId = s.doc.id;
+      s.insets  = (saved.insets  ?? []) as typeof s.insets;
+      // Keep the active slot's snapshot in sync so slot-switching restores correctly
+      const activeSlot = s.canvasSlots.find(sl => sl.id === s.activeSlotId);
+      if (activeSlot) {
+        activeSlot.doc    = JSON.parse(JSON.stringify(s.doc));
+        activeSlot.groups = JSON.parse(JSON.stringify(s.groups));
+        activeSlot.insets = JSON.parse(JSON.stringify(s.insets));
       }
-    }),
-
-    // ── Multi-canvas ─────────────────────────────────────────────────────
-    canvases: [{ id: defaultDoc.id, doc: defaultDoc, insets: [], past: [], future: [] }] as CanvasSlot[],
-    activeCanvasId: defaultDoc.id,
-
-    addCanvas: () => set((s) => {
-      if (s.canvases.length >= MAX_CANVAS_SLOTS) return;
-      // Save active canvas first
-      const idx = s.canvases.findIndex(c => c.id === s.activeCanvasId);
-      if (idx !== -1) {
-        s.canvases[idx].doc     = s.doc as CanvasDoc;
-        s.canvases[idx].insets  = s.insets as InsetPair[];
-        s.canvases[idx].past    = s.past as Snapshot[];
-        s.canvases[idx].future  = s.future as Snapshot[];
-      }
-      const newId = `doc-${Date.now()}`;
-      const newDoc = makeDefaultDoc(newId, `Figure ${s.canvases.length + 1}`);
-      const newSlot: CanvasSlot = { id: newId, doc: newDoc, insets: [], past: [], future: [] };
-      s.canvases.push(newSlot);
-      // Switch to the new canvas
-      s.activeCanvasId = newId;
-      s.doc    = newDoc as typeof s.doc;
-      s.insets = [] as typeof s.insets;
-      s.past   = [] as typeof s.past;
-      s.future = [] as typeof s.future;
-      s.selectedId = null;
-      persist(buildPersist(s));
-    }),
-
-    removeCanvas: (id) => set((s) => {
-      if (s.canvases.length <= 1) return; // always keep at least one
-      const newCanvases = s.canvases.filter(c => c.id !== id);
-      s.canvases = newCanvases as typeof s.canvases;
-      if (s.activeCanvasId === id) {
-        const target = newCanvases[newCanvases.length - 1];
-        s.activeCanvasId = target.id;
-        s.doc    = target.doc as typeof s.doc;
-        s.insets = (target.insets ?? []) as typeof s.insets;
-        s.past   = (target.past   ?? []) as typeof s.past;
-        s.future = (target.future ?? []) as typeof s.future;
-        s.selectedId = null;
-      }
-      persist(buildPersist(s));
-    }),
-
-    switchCanvas: (id) => set((s) => {
-      if (id === s.activeCanvasId) return;
-      // Save current canvas
-      const curIdx = s.canvases.findIndex(c => c.id === s.activeCanvasId);
-      if (curIdx !== -1) {
-        s.canvases[curIdx].doc     = s.doc as CanvasDoc;
-        s.canvases[curIdx].insets  = s.insets as InsetPair[];
-        s.canvases[curIdx].past    = s.past as Snapshot[];
-        s.canvases[curIdx].future  = s.future as Snapshot[];
-      }
-      // Load target canvas
-      const target = s.canvases.find(c => c.id === id);
-      if (!target) return;
-      s.activeCanvasId = id;
-      s.doc    = target.doc as typeof s.doc;
-      s.insets = (target.insets ?? []) as typeof s.insets;
-      s.past   = (target.past   ?? []) as typeof s.past;
-      s.future = (target.future ?? []) as typeof s.future;
-      s.selectedId = null;
-    }),
-
-    renameCanvas: (id, title) => set((s) => {
-      const slot = s.canvases.find(c => c.id === id);
-      if (slot) slot.doc.title = title;
-      if (id === s.activeCanvasId) s.doc.title = title;
-      persist(buildPersist(s));
     }),
 
     // ── Library ──────────────────────────────────────────────────────────
     groups: [],
     addGroup: (group) => set((s) => {
       s.groups.push(group);
-      persist(buildPersist(s));
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
     updateGroup: (id, patch) => set((s) => {
       const i = s.groups.findIndex(g => g.id === id);
       if (i !== -1) Object.assign(s.groups[i], patch);
-      persist(buildPersist(s));
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
     removeGroup: (id) => set((s) => {
       s.groups = s.groups.filter(g => g.id !== id);
-      persist(buildPersist(s));
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
     toggleGroupExpanded: (id) => set((s) => {
       const i = s.groups.findIndex(g => g.id === id);
@@ -382,12 +277,12 @@ export const useStore = create<AppState>()(
     addImageToGroup: (groupId, image) => set((s) => {
       const i = s.groups.findIndex(g => g.id === groupId);
       if (i !== -1) s.groups[i].images.push(image);
-      persist(buildPersist(s));
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
     removeImageFromGroup: (groupId, imageId) => set((s) => {
       const i = s.groups.findIndex(g => g.id === groupId);
       if (i !== -1) s.groups[i].images = s.groups[i].images.filter(img => img.id !== imageId);
-      persist(buildPersist(s));
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
 
     // ── Document ──────────────────────────────────────────────────────────
@@ -401,7 +296,12 @@ export const useStore = create<AppState>()(
       if ((newW !== oldW || newH !== oldH) && s.doc.objects.length > 0) {
         const sx = newW / oldW;
         const sy = newH / oldH;
-        const s1 = Math.min(sx, sy);
+        // Uniform size factor = geometric mean of the axis ratios. Unlike
+        // min(sx, sy) — which is < 1 for any aspect swap and so shrank
+        // objects on every orientation/size switch — this is exactly 1 for
+        // a W/H swap, equals the ratio for uniform resizes, and is fully
+        // reversible (resizing back restores original sizes).
+        const s1 = Math.sqrt(sx * sy);
         s.doc.objects.forEach(obj => {
           obj.x      = Math.round(obj.x      * sx);
           obj.y      = Math.round(obj.y      * sy);
@@ -410,44 +310,44 @@ export const useStore = create<AppState>()(
           if (obj.type === 'scalebar') obj.length = Math.round(obj.length * s1);
         });
       }
-      persist(buildPersist(s));
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
     updateMetadata: (patch) => set((s) => {
       Object.assign(s.doc.metadata, patch);
-      persist(buildPersist(s));
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
 
     // ── Canvas objects ────────────────────────────────────────────────────
     addObject: (obj) => set((s) => {
       pushHistory(s);
       s.doc.objects.push(obj);
-      persist(buildPersist(s));
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
     addObjects: (objs) => set((s) => {
       if (objs.length === 0) return;
       pushHistory(s);
       for (const obj of objs) s.doc.objects.push(obj);
-      persist(buildPersist(s));
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
     updateObject: (id, patch) => set((s) => {
       const structural = ['x','y','width','height','rotation'].some(k => k in patch);
       if (structural) pushHistory(s);
       const i = s.doc.objects.findIndex(o => o.id === id);
       if (i !== -1) Object.assign(s.doc.objects[i], patch);
-      persist(buildPersist(s));
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
     removeObject: (id) => set((s) => {
       pushHistory(s);
       s.doc.objects = s.doc.objects.filter(o => o.id !== id);
       s.insets = s.insets.filter(p => p.parentObjectId !== id && p.insetObjectId !== id);
-      persist(buildPersist(s));
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
     reorderObjects: (ids) => set((s) => {
       pushHistory(s);
       s.doc.objects = ids
         .map(id => s.doc.objects.find(o => o.id === id))
         .filter(Boolean) as typeof s.doc.objects;
-      persist(buildPersist(s));
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
     batchUpdateObjects: (updates) => set((s) => {
       pushHistory(s);
@@ -455,7 +355,7 @@ export const useStore = create<AppState>()(
         const i = s.doc.objects.findIndex(o => o.id === id);
         if (i !== -1) Object.assign(s.doc.objects[i], patch);
       }
-      persist(buildPersist(s));
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
 
     duplicateObject: (id) => set((s) => {
@@ -468,7 +368,7 @@ export const useStore = create<AppState>()(
       clone.y    += 20;
       clone.label = clone.label + ' (copy)';
       s.doc.objects.push(clone);
-      persist(buildPersist(s));
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
 
     // ── Insets ────────────────────────────────────────────────────────────
@@ -476,12 +376,12 @@ export const useStore = create<AppState>()(
     addInset: (pair) => set((s) => {
       pushHistory(s);
       s.insets.push(pair);
-      persist(buildPersist(s));
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
     removeInset: (id) => set((s) => {
       pushHistory(s);
       s.insets = s.insets.filter(p => p.id !== id);
-      persist(buildPersist(s));
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
 
     // ── Undo / redo ───────────────────────────────────────────────────────
@@ -496,7 +396,7 @@ export const useStore = create<AppState>()(
       if (s.future.length > 60) s.future.shift();
       s.doc.objects = prev.objects as typeof s.doc.objects;
       s.insets      = prev.insets  as typeof s.insets;
-      persist(buildPersist(s));
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
 
     redo: () => set((s) => {
@@ -507,7 +407,7 @@ export const useStore = create<AppState>()(
       if (s.past.length > 60) s.past.shift();
       s.doc.objects = next.objects as typeof s.doc.objects;
       s.insets      = next.insets  as typeof s.insets;
-      persist(buildPersist(s));
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
     }),
 
     // ── Selection / tool / zoom ───────────────────────────────────────────
@@ -536,6 +436,9 @@ export const useStore = create<AppState>()(
       s.rulerUnit = s.rulerUnit === 'in' ? 'cm' : s.rulerUnit === 'cm' ? 'mm' : 'in';
     }),
 
+    pendingGrid: null,
+    setPendingGrid: (g) => set((s) => { s.pendingGrid = g; }),
+
     savedVersion: 0,
     markSaved: () => set((s) => { s.savedVersion = s.past.length; }),
     hasUnsavedChanges: (): boolean => {
@@ -551,15 +454,98 @@ export const useStore = create<AppState>()(
       const oldH = s.doc.height;
       s.doc.width  = oldH;
       s.doc.height = oldW;
-      const s1 = Math.min(oldH / oldW, oldW / oldH);
+      // Only positions remap to the swapped axes — object SIZES must not
+      // change on an orientation flip. (The previous min(aspect, 1/aspect)
+      // factor was always < 1, so every flip shrank objects geometrically
+      // toward zero.)
       s.doc.objects.forEach(obj => {
-        obj.x      = Math.round(obj.x      * (oldH / oldW));
-        obj.y      = Math.round(obj.y      * (oldW / oldH));
-        obj.width  = Math.round(obj.width  * s1);
-        obj.height = Math.round(obj.height * s1);
-        if (obj.type === 'scalebar') obj.length = Math.round(obj.length * s1);
+        obj.x = Math.round(obj.x * (oldH / oldW));
+        obj.y = Math.round(obj.y * (oldW / oldH));
       });
-      persist(buildPersist(s));
+      persist({ doc: s.doc as CanvasDoc, groups: s.groups as ImageGroup[], insets: s.insets as InsetPair[] });
+    }),
+
+    // ── Multi-canvas slots ────────────────────────────────────────────────
+    // Each slot owns its own doc/groups/insets snapshot.  The top-level
+    // doc/groups/insets are always the ACTIVE slot's live data.  On slot
+    // switch we snapshot the current state into the leaving slot and restore
+    // the target slot's snapshot, so each page is fully independent.
+    canvasSlots: [
+      { id: 'slot-default', filePath: null, doc: defaultDoc, groups: [], insets: [] },
+    ] as CanvasSlot[],
+    activeSlotId: 'slot-default',
+
+    openCanvasSlot: () => {
+      let result: 'opened' | 'full' = 'full';
+      set((s) => {
+        if (s.canvasSlots.length >= MAX_CANVAS_SLOTS) return;
+
+        // Snapshot current live state into the currently active slot
+        const cur = s.canvasSlots.find(sl => sl.id === s.activeSlotId);
+        if (cur) {
+          cur.doc    = JSON.parse(JSON.stringify(s.doc));
+          cur.groups = JSON.parse(JSON.stringify(s.groups));
+          cur.insets = JSON.parse(JSON.stringify(s.insets));
+        }
+
+        const id = `slot-${Date.now()}`;
+        const newDoc: CanvasDoc = {
+          ...defaultDoc,
+          id: `doc-${id}`,
+          title: 'Untitled Figure',
+          objects: [],
+          metadata: { ...defaultDoc.metadata },
+        };
+        const newSlot: CanvasSlot = { id, filePath: null, doc: newDoc, groups: [], insets: [] };
+        s.canvasSlots.push(newSlot);
+
+        // Switch live state to the new empty slot
+        s.doc    = newDoc as typeof s.doc;
+        s.groups = [] as typeof s.groups;
+        s.insets = [] as typeof s.insets;
+        s.activeSlotId = id;
+
+        result = 'opened';
+      });
+      return result;
+    },
+
+    closeCanvasSlot: (id) => set((s) => {
+      if (s.canvasSlots.length <= 1) return; // always keep at least one
+      const wasActive = s.activeSlotId === id;
+      s.canvasSlots = s.canvasSlots.filter(sl => sl.id !== id);
+      if (wasActive) {
+        const next = s.canvasSlots[s.canvasSlots.length - 1];
+        s.activeSlotId = next.id;
+        s.doc    = JSON.parse(JSON.stringify(next.doc));
+        s.groups = JSON.parse(JSON.stringify(next.groups));
+        s.insets = JSON.parse(JSON.stringify(next.insets));
+      }
+    }),
+
+    switchToCanvasSlot: (id) => set((s) => {
+      if (!s.canvasSlots.some(sl => sl.id === id)) return;
+      if (id === s.activeSlotId) return;
+
+      // Save current live state into the leaving slot
+      const cur = s.canvasSlots.find(sl => sl.id === s.activeSlotId);
+      if (cur) {
+        cur.doc    = JSON.parse(JSON.stringify(s.doc));
+        cur.groups = JSON.parse(JSON.stringify(s.groups));
+        cur.insets = JSON.parse(JSON.stringify(s.insets));
+      }
+
+      // Restore target slot's snapshot
+      const target = s.canvasSlots.find(sl => sl.id === id)!;
+      s.doc    = JSON.parse(JSON.stringify(target.doc));
+      s.groups = JSON.parse(JSON.stringify(target.groups));
+      s.insets = JSON.parse(JSON.stringify(target.insets));
+      s.activeSlotId = id;
     }),
   }))
 );
+
+// Expose the store in dev builds for debugging and E2E testing.
+if (import.meta.env.DEV && typeof window !== 'undefined') {
+  (window as unknown as { __store?: typeof useStore }).__store = useStore;
+}

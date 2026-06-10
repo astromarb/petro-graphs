@@ -104,7 +104,8 @@ export interface TextObject extends CanvasObjectBase {
 
 export interface ShapeObject extends CanvasObjectBase {
   type: 'shape';
-  shape: 'rect' | 'ellipse';
+  /** 'line' is a horizontal rule rendered as a filled bar `height` px thick */
+  shape: 'rect' | 'ellipse' | 'line';
   fill: string;
   fillOpacity: number;
   border: BorderStyle;
@@ -155,4 +156,22 @@ export interface DocumentMetadata {
   date: string;
 }
 
-export type Tool = 'select' | 'text' | 'shape' | 'scalebar' | 'pan' | 'inset';
+export type Tool = 'select' | 'text' | 'shape' | 'line' | 'scalebar' | 'pan' | 'inset' | 'grid-place';
+
+/** Pending grid config set by GridDialog; consumed by CanvasArea area-draw. */
+export interface PendingGrid {
+  imageIds: string[];
+  groupId: string;
+  cols: number;
+  gap: number;
+}
+
+/** One open canvas/figure. Up to MAX_CANVAS_SLOTS may be open simultaneously. */
+export interface CanvasSlot {
+  id: string;
+  /** File path on disk, or null if not yet saved */
+  filePath: string | null;
+  doc: CanvasDoc;
+  groups: ImageGroup[];
+  insets: InsetPair[];
+}

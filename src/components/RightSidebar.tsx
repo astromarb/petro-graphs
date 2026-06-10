@@ -423,7 +423,7 @@ function ShapePanel({ obj, update }: { obj: ShapeObject; update: (p: Partial<Sha
       <div>
         <div className="input-label">Shape</div>
         <div className="segmented">
-          {(['rect','ellipse'] as const).map(s => (
+          {(['rect','ellipse','line'] as const).map(s => (
             <button key={s} className={`segmented-btn${obj.shape === s ? ' active' : ''}`}
               onClick={() => update({ shape: s })}>
               {s}

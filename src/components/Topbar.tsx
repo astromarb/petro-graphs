@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import {
-  MousePointer2, Type, Square, Ruler, Hand, Crop,
+  MousePointer2, Type, Square, Ruler, Hand, Crop, Minus,
   Download, Layers, Info, ZoomIn, ZoomOut, Maximize2,
   Undo2, Redo2, FolderOpen, Save, LayoutGrid,
 } from 'lucide-react';
@@ -12,14 +12,16 @@ import { sharedFabricRef } from '../fabricRef';
 import { isDesktop, saveProject, saveProjectAs, openProject } from '../fileOps';
 import { nanoid, niceScaleBar, UNIT_METERS, ptToPx } from '../utils';
 import type { ScaleBarObject, ImageObject } from '../types';
+import { version as APP_VERSION } from '../../package.json';
 
-const TOOLS: { id: Tool; icon: React.ReactNode; label: string; sep?: boolean }[] = [
-  { id: 'select',   icon: <MousePointer2 size={14} />, label: 'Select (V)' },
-  { id: 'pan',      icon: <Hand size={14} />,           label: 'Pan (H) · Space to temp-pan' },
-  { id: 'text',     icon: <Type size={14} />,           label: 'Text / LaTeX (T)', sep: true },
-  { id: 'shape',    icon: <Square size={14} />,          label: 'Shape (S)' },
-  { id: 'scalebar', icon: <Ruler size={14} />,           label: 'Scale Bar (B) — select calibrated image first' },
-  { id: 'inset',    icon: <Crop size={14} />,            label: 'Inset (I)' },
+const TOOLS: { id: Tool; icon: React.ReactNode; name: string; label: string; sep?: boolean }[] = [
+  { id: 'select',   icon: <MousePointer2 size={15} />, name: 'Select',   label: 'Select (V)' },
+  { id: 'pan',      icon: <Hand size={15} />,           name: 'Pan',      label: 'Pan (H) · Space to temp-pan' },
+  { id: 'text',     icon: <Type size={15} />,           name: 'Text',     label: 'Text / LaTeX (T)', sep: true },
+  { id: 'shape',    icon: <Square size={15} />,          name: 'Shape',    label: 'Shape (S)' },
+  { id: 'line',     icon: <Minus size={15} />,            name: 'Line',     label: 'Horizontal Line (L) — click and drag to draw' },
+  { id: 'scalebar', icon: <Ruler size={15} />,           name: 'Scale Bar', label: 'Scale Bar (B) — click a calibrated image to place' },
+  { id: 'inset',    icon: <Crop size={15} />,            name: 'Inset',    label: 'Inset (I)' },
 ];
 
 export default function Topbar() {
@@ -131,9 +133,10 @@ export default function Topbar() {
       <div className="topbar">
         {/* Logo */}
         <div className="topbar-logo">
-          <div className="logo-mark">PG</div>
+          <img src="/favicon.svg" alt="Petro Graphs" className="logo-mark" />
           <div>
-            <div className="topbar-title">PetroGraphing</div>
+            <div className="topbar-title">Petro Graphs</div>
+            <div className="topbar-sub">Version {APP_VERSION}</div>
           </div>
         </div>
 
@@ -228,7 +231,7 @@ export default function Topbar() {
             <React.Fragment key={t.id}>
               {t.sep && <div className="sep" />}
               <button
-                className={`btn-icon${tool === t.id ? ' active' : ''}`}
+                className={`btn-tool${tool === t.id ? ' active' : ''}`}
                 title={t.label}
                 onClick={() => {
                   if (t.id === 'scalebar') {
@@ -240,6 +243,7 @@ export default function Topbar() {
                 }}
               >
                 {t.icon}
+                <span>{t.name}</span>
               </button>
             </React.Fragment>
           ))}
@@ -249,11 +253,12 @@ export default function Topbar() {
 
         {/* Grid layout */}
         <button
-          className="btn-icon"
+          className="btn-tool"
           title="Place images as grid"
           onClick={() => setShowGrid(true)}
         >
-          <LayoutGrid size={14} />
+          <LayoutGrid size={15} />
+          <span>Grid</span>
         </button>
 
         <div className="sep" />
@@ -268,19 +273,21 @@ export default function Topbar() {
         <button className="btn-icon" onClick={() => setZoom(zoom + 0.1)} title="Zoom in (+)">
           <ZoomIn size={14} />
         </button>
-        <button className="btn-icon" onClick={fitView} title="Fit to screen (0)">
-          <Maximize2 size={13} />
+        <button className="btn-tool" onClick={fitView} title="Fit to screen (0)">
+          <Maximize2 size={15} />
+          <span>Fit</span>
         </button>
 
         <div style={{ flex: 1 }} />
 
         <button
-          className={`btn-icon${showRulers ? ' active' : ''}`}
+          className={`btn-tool${showRulers ? ' active' : ''}`}
           title="Toggle rulers (R)"
           onClick={toggleRulers}
           style={{ opacity: showRulers ? 1 : 0.6 }}
         >
-          <Ruler size={14} />
+          <Ruler size={15} />
+          <span>Rulers</span>
         </button>
         {showRulers && (
           <button
@@ -296,11 +303,13 @@ export default function Topbar() {
             {rulerUnit}
           </button>
         )}
-        <button className="btn-icon" title="Layers" onClick={toggleLayersPanel}>
-          <Layers size={14} />
+        <button className="btn-tool" title="Layers" onClick={toggleLayersPanel}>
+          <Layers size={15} />
+          <span>Layers</span>
         </button>
-        <button className="btn-icon" title="Document metadata" onClick={toggleMetadataPanel}>
-          <Info size={14} />
+        <button className="btn-tool" title="Document metadata" onClick={toggleMetadataPanel}>
+          <Info size={15} />
+          <span>Info</span>
         </button>
 
         {/* Browser fallback Save/Open — shown on non-desktop only (desktop has native file ops above) */}

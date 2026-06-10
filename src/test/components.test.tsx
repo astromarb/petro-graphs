@@ -344,12 +344,7 @@ describe('PageTabs', () => {
 
   it('displays the current doc title', async () => {
     const { default: PageTabs } = await import('../components/PageTabs');
-    const s = useStore.getState();
-    const updatedDoc = { ...s.doc, title: 'My Figure' };
-    useStore.setState({
-      doc: updatedDoc,
-      canvases: s.canvases.map(c => c.id === s.activeCanvasId ? { ...c, doc: updatedDoc } : c),
-    });
+    useStore.setState({ doc: { ...useStore.getState().doc, title: 'My Figure' } });
     render(<PageTabs />);
     expect(screen.getByText('My Figure')).toBeInTheDocument();
   });
