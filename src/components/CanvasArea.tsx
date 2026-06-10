@@ -10,6 +10,14 @@ import { nanoid, niceScaleBar, UNIT_METERS } from '../utils';
 import { renderLatexToFabricImage, renderLatexToDataUrl } from '../latexRenderer';
 import { sharedFabricRef } from '../fabricRef';
 
+// Fabric v7 changed the default object origin from left/top to center/center.
+// The entire app's coordinate model (store x/y, hit-testing, drop placement,
+// rulers, export) treats left/top as the object's top-left corner, so restore
+// the v6 defaults globally. Objects that genuinely need center origin set it
+// explicitly at creation time, which overrides these defaults.
+fabric.FabricObject.ownDefaults.originX = 'left';
+fabric.FabricObject.ownDefaults.originY = 'top';
+
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 function borderToDash(style: BorderStyle['style'], w: number): number[] {
@@ -113,11 +121,15 @@ function RulerOverlay({
   // Determine tick spacing in real-world units
   // pxPerUnit = how many doc-pixels per 1 real unit (inch or cm)
   const pxPerIn = dpi;
-  const pxPerUnit = rulerUnit === 'in' ? pxPerIn : pxPerIn / 2.54;
+  const pxPerUnit = rulerUnit === 'in' ? pxPerIn
+    : rulerUnit === 'mm'               ? pxPerIn / 25.4
+    :                                    pxPerIn / 2.54;  // cm
 
   // Nice tick intervals in real units
   const unitCandidates = rulerUnit === 'in'
     ? [1/16, 1/8, 1/4, 1/2, 1, 2, 3, 6, 12]
+    : rulerUnit === 'mm'
+    ? [0.5, 1, 2, 5, 10, 25, 50, 100, 250]
     : [0.1, 0.25, 0.5, 1, 2, 5, 10, 25, 50];
   const minSpacingPx = 40;
   const tickUnit = unitCandidates.find(c => c * pxPerUnit * zoom >= minSpacingPx) ?? unitCandidates[unitCandidates.length - 1];
@@ -172,11 +184,14 @@ function RulerOverlay({
 }
 
 
-// Extra canvas pixels on every side beyond the document boundary.
-// Objects placed outside the document are rendered here rather than being
-// silently clipped at the doc edge — they appear on top of the checkered
-// background instead of disappearing.
-const OVERFLOW_PAD = 600;
+// OVERFLOW_PAD is intentionally 0: the canvas equals the document boundary.
+// A non-zero pad caused the canvas element to be much larger than the page,
+// making overflow areas visible as a "ghost" rectangle next to the white page
+// when the outer wrapper used overflow:hidden + flex centering (the wrapper
+// centered the entire canvas, not the document within it).  Objects outside
+// the document are clipped by Fabric at the canvas edge — acceptable since
+// the export always crops to the document boundary anyway.
+const OVERFLOW_PAD = 0;
 
 // ── Component ─────────────────────────────────────────────────────────────
 
@@ -329,6 +344,7 @@ export default function CanvasArea() {
 
       fabricRef.current = fc;
       sharedFabricRef.current = fc;
+      if (import.meta.env.DEV) (window as unknown as { __fc?: fabric.Canvas }).__fc = fc;
   
       // Document background rect — the white page within the larger canvas.
       // Canvas background is transparent so the CSS checkerboard shows through
@@ -1299,7 +1315,7 @@ export default function CanvasArea() {
         </div>
       )}
 
-      {/* Fabric canvas — OVERFLOW_PAD pixels larger than the document on all sides */}
+      {/* Fabric canvas — sized exactly to the document boundary */}
       <div style={{ position: 'relative', flexShrink: 0 }}>
         <canvas ref={canvasElRef} />
 
