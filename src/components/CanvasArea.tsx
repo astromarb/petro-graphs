@@ -228,8 +228,11 @@ export default function CanvasArea() {
   const docBgRef = useRef<fabric.Rect | null>(null);
 
   // ── Panning ───────────────────────────────────────────────────────────
-  const isPanning = useRef(false);
-  const lastPan   = useRef({ x: 0, y: 0 });
+  const isPanning   = useRef(false);
+  const lastPan     = useRef({ x: 0, y: 0 });
+  // User pan accumulated in scene-space so that zoom effects can re-derive the
+  // correct canvas-pixel translation without discarding the accumulated offset.
+  const panSceneRef = useRef({ x: 0, y: 0 });
 
   // ── Drop highlight ────────────────────────────────────────────────────
   const [dropHighlight, setDropHighlight] = useState(false);
@@ -287,6 +290,9 @@ export default function CanvasArea() {
 
   // Used to trigger the sync effect after canvas init completes
   const [fabricReady, setFabricReady] = useState(false);
+  // Canvas-pixel position of doc (0,0) — kept in sync with the Fabric viewport translation
+  // so the page-boundary shadow and rulers always match where the document is rendered.
+  const [docOriginPx, setDocOriginPx] = useState({ x: OVERFLOW_PAD, y: OVERFLOW_PAD });
   // Smart guide lines shown during drag: screen-pixel coordinates relative to canvas div
   const [guides, setGuides] = useState<{ type: 'v' | 'h'; pos: number }[]>([]);
   const setGuidesRef = useRef(setGuides);
@@ -312,6 +318,28 @@ export default function CanvasArea() {
         selection: true,
         preserveObjectStacking: true,
       });
+
+      // Size canvas to fit the viewport immediately so we never flash at zoom=1.
+      // Must include OVERFLOW_PAD and use setViewportTransform (not fc.setZoom) so
+      // the initial canvas state matches the zoom-effect contract: doc (0,0) renders
+      // at canvas pixel (OVERFLOW_PAD, OVERFLOW_PAD), keeping the shadow div aligned.
+      const wrap = wrapRef.current;
+      if (wrap) {
+        const padded = 0.92;
+        const { doc: d } = useStore.getState();
+        const fitZoom = Math.min(
+          (wrap.clientWidth  * padded) / d.width,
+          (wrap.clientHeight * padded) / d.height,
+        );
+        const z = Math.max(0.05, Math.min(4, fitZoom));
+        fc.setDimensions({
+          width:  Math.round(d.width  * z) + 2 * OVERFLOW_PAD,
+          height: Math.round(d.height * z) + 2 * OVERFLOW_PAD,
+        });
+        fc.setViewportTransform([z, 0, 0, z, OVERFLOW_PAD, OVERFLOW_PAD]);
+        useStore.getState().setZoom(z);
+        prevDocSizeRef.current = { w: d.width, h: d.height };
+      }
       created = fc;
 
       fabricRef.current = fc;
@@ -507,7 +535,7 @@ export default function CanvasArea() {
         scalebarDrawRef.current.y2 = pt.y;
         fc.renderAll();
       });
-  
+
       // ── mouse:up — finish grid-place rect draw ────────────────────────
       fc.on('mouse:up', () => {
         if (toolRef.current !== 'grid-place') return;
@@ -521,31 +549,48 @@ export default function CanvasArea() {
         }
         gridDrawRef.current = null;
         if (!d || !pg) { setToolRef.current('select'); return; }
-  
+
         const areaW = Math.abs(d.x2 - d.x1);
         const areaH = Math.abs(d.y2 - d.y1);
         if (areaW < 20 || areaH < 20) { setToolRef.current('select'); return; }
-  
+
         const { groups: sg } = useStore.getState();
         const grp = sg.find(g => g.id === pg.groupId);
         if (!grp) { setToolRef.current('select'); return; }
-  
+
         const imgs = pg.imageIds
           .map(id => grp.images.find(i => i.id === id))
           .filter(Boolean) as typeof grp.images;
-  
+
         if (imgs.length === 0) { setToolRef.current('select'); return; }
-  
+
         const cols  = pg.cols;
         const rows  = Math.ceil(imgs.length / cols);
         const gap   = pg.gap;
         const cellW = Math.floor((areaW - gap * (cols - 1)) / cols);
-        const cellH = Math.floor((areaH - gap * (rows - 1)) / rows);
         const originX = Math.min(d.x1, d.x2);
         const originY = Math.min(d.y1, d.y2);
-  
-        if (cellW < 10 || cellH < 10) { setToolRef.current('select'); return; }
-  
+
+        if (cellW < 10) { setToolRef.current('select'); return; }
+
+        // Preserve each image's natural aspect ratio: width = cellW, height derived.
+        const naturalH = imgs.map(img =>
+          img.width > 0 ? Math.max(1, Math.round(cellW * img.height / img.width)) : cellW,
+        );
+
+        // Row Y offsets: each row is as tall as the tallest image in that row.
+        const rowY: number[] = [];
+        let cumY = 0;
+        for (let r = 0; r < rows; r++) {
+          rowY.push(cumY);
+          let maxH = 0;
+          for (let c = 0; c < cols; c++) {
+            const i = r * cols + c;
+            if (i < imgs.length) maxH = Math.max(maxH, naturalH[i]);
+          }
+          cumY += maxH + gap;
+        }
+
         const objs: CanvasObject[] = imgs.map((img, idx) => ({
           id: nanoid(),
           type: 'image' as const,
@@ -553,16 +598,16 @@ export default function CanvasArea() {
           groupId: grp.id,
           mode: img.mode,
           x: Math.round(originX + (idx % cols) * (cellW + gap)),
-          y: Math.round(originY + Math.floor(idx / cols) * (cellH + gap)),
+          y: Math.round(originY + rowY[Math.floor(idx / cols)]),
           width:  cellW,
-          height: cellH,
+          height: naturalH[idx],
           rotation: 0, locked: false, visible: true,
           label: img.name,
           border: { color: '#ffffff', width: 2, style: 'solid' as const, radius: 0 },
           opacity: 1,
           adjustments: { ...DEFAULT_ADJUSTMENTS },
         } as ImageObject));
-  
+
         useStore.getState().addObjects(objs);
         useStore.getState().setPendingGrid(null);
         setToolRef.current('select');
@@ -712,6 +757,7 @@ export default function CanvasArea() {
     const prev = prevDocSizeRef.current;
     if (prev.w === doc.width && prev.h === doc.height) return;
     prevDocSizeRef.current = { w: doc.width, h: doc.height };
+    panSceneRef.current = { x: 0, y: 0 }; // reset pan when doc resizes or on first load
     const wrap = wrapRef.current;
     if (!wrap) return;
     const padded = 0.92; // leave 8% margin
@@ -725,6 +771,7 @@ export default function CanvasArea() {
   // ── fitView on demand (0 key, toolbar button) ─────────────────────────
   useEffect(() => {
     if (fitViewRequest === 0) return;
+    panSceneRef.current = { x: 0, y: 0 }; // center the document when fitting
     const wrap = wrapRef.current;
     if (!wrap) return;
     const padded = 0.92;
@@ -746,18 +793,22 @@ export default function CanvasArea() {
     const fc    = fabricRef.current;
     const bgRect = docBgRef.current;
     if (!fc) return;
+    // Derive canvas-pixel translation from scene-space pan so the user's pan
+    // position is preserved when zoom changes (panSceneRef holds the offset in
+    // scene units; multiplying by zoom gives the canvas-pixel displacement).
+    const newTx = OVERFLOW_PAD + panSceneRef.current.x * zoom;
+    const newTy = OVERFLOW_PAD + panSceneRef.current.y * zoom;
     fc.setDimensions({
       width:  Math.round(doc.width  * zoom) + 2 * OVERFLOW_PAD,
       height: Math.round(doc.height * zoom) + 2 * OVERFLOW_PAD,
     });
-    // Reset viewport so doc coord (0,0) maps to canvas pixel (OVERFLOW_PAD, OVERFLOW_PAD).
-    // This also resets any accumulated pan (matching previous setZoom() behaviour).
-    fc.setViewportTransform([zoom, 0, 0, zoom, OVERFLOW_PAD, OVERFLOW_PAD]);
+    fc.setViewportTransform([zoom, 0, 0, zoom, newTx, newTy]);
     if (bgRect) {
       bgRect.set({ width: doc.width, height: doc.height });
       fc.sendObjectToBack(bgRect);
     }
     fc.renderAll();
+    setDocOriginPx({ x: newTx, y: newTy });
   }, [zoom, doc.width, doc.height, fabricReady]);
 
   useEffect(() => {
@@ -810,10 +861,20 @@ export default function CanvasArea() {
       if (!isPanning.current) return;
       const fc = fabricRef.current;
       if (!fc) return;
-      fc.relativePan(new fabric.Point(e.clientX - lastPan.current.x, e.clientY - lastPan.current.y));
+      const dx = e.clientX - lastPan.current.x;
+      const dy = e.clientY - lastPan.current.y;
       lastPan.current = { x: e.clientX, y: e.clientY };
-      const t = fc.viewportTransform;
-      setPan(-t[4], -t[5]);
+      // Accumulate in scene space so the zoom effect can reconstruct the correct
+      // canvas-pixel translation at any zoom level without clamping or drift.
+      const z = zoomRef.current;
+      panSceneRef.current.x += dx / z;
+      panSceneRef.current.y += dy / z;
+      const newTx = OVERFLOW_PAD + panSceneRef.current.x * z;
+      const newTy = OVERFLOW_PAD + panSceneRef.current.y * z;
+      fc.setViewportTransform([z, 0, 0, z, newTx, newTy]);
+      fc.renderAll();
+      setDocOriginPx({ x: newTx, y: newTy });
+      setPan(-newTx, -newTy);
     };
     const onUp = () => {
       isPanning.current = false;
@@ -1255,14 +1316,20 @@ export default function CanvasArea() {
       )}
 
       {/* Fabric canvas — sized exactly to the document boundary */}
-      <div style={{
-        position: 'relative', flexShrink: 0,
-        outline: '1px solid rgba(255,255,255,0.08)',
-        boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
-      }}>
+      <div style={{ position: 'relative', flexShrink: 0 }}>
         <canvas ref={canvasElRef} />
 
-        {/* Smart alignment guides */}
+        {/* Page-boundary shadow: outlines the document area; tracks pan via docOriginPx */}
+        <div style={{
+          position: 'absolute', pointerEvents: 'none', zIndex: 1,
+          left: docOriginPx.x, top: docOriginPx.y,
+          width:  Math.round(doc.width  * zoom),
+          height: Math.round(doc.height * zoom),
+          boxShadow: '0 0 0 1px rgba(255,255,255,0.08), 0 12px 48px rgba(0,0,0,0.7)',
+          outline: '1px solid rgba(255,255,255,0.06)',
+        }} />
+
+        {/* Smart alignment guides — g.pos is in canvas pixels (includes OVERFLOW_PAD) */}
         {guides.map((g, i) => (
           <div key={i} style={{
             position: 'absolute', pointerEvents: 'none', zIndex: 12,
@@ -1273,16 +1340,17 @@ export default function CanvasArea() {
           }} />
         ))}
 
-        {/* Rulers — sit just outside the canvas edge */}
+        {/* Rulers — anchored to the document area (tracks pan via docOriginPx) */}
         {showRulers && (
           <>
-            <RulerOverlay orientation="horizontal" size={Math.round(doc.width * zoom)} zoom={zoom} dpi={doc.dpi} docSize={doc.width} rulerUnit={rulerUnit} />
-            <RulerOverlay orientation="vertical"   size={Math.round(doc.height * zoom)} zoom={zoom} dpi={doc.dpi} docSize={doc.height} rulerUnit={rulerUnit} />
-            {/* Unit toggle button at the ruler corner */}
+            <RulerOverlay orientation="horizontal" size={Math.round(doc.width * zoom)} zoom={zoom} dpi={doc.dpi} docSize={doc.width} rulerUnit={rulerUnit} left={docOriginPx.x} />
+            <RulerOverlay orientation="vertical"   size={Math.round(doc.height * zoom)} zoom={zoom} dpi={doc.dpi} docSize={doc.height} rulerUnit={rulerUnit} top={docOriginPx.y} />
+            {/* Unit toggle in the ruler corner */}
             <button
               onClick={toggleRulerUnit}
               style={{
-                position: 'absolute', top: -18, left: -18,
+                position: 'absolute',
+                top: docOriginPx.y - 18, left: docOriginPx.x - 18,
                 width: 18, height: 18, padding: 0,
                 background: 'rgba(20,20,28,0.88)', border: '1px solid rgba(255,255,255,0.08)',
                 color: 'rgba(255,255,255,0.6)', fontSize: 7, lineHeight: 1,
