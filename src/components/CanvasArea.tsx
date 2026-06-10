@@ -6,7 +6,7 @@ import type {
   BorderStyle, InsetPair, ThinSectionImage, ImageAdjustments, PendingGrid,
 } from '../types';
 import { DEFAULT_ADJUSTMENTS } from '../types';
-import { nanoid, niceScaleBar, UNIT_METERS } from '../utils';
+import { nanoid, niceScaleBar, UNIT_METERS, ptToPx } from '../utils';
 import { renderLatexToFabricImage, renderLatexToDataUrl } from '../latexRenderer';
 import { sharedFabricRef } from '../fabricRef';
 
@@ -522,7 +522,8 @@ export default function CanvasArea() {
           rotation: 0, locked: false, visible: true,
           label: `${realLength} ${unit}`,
           length: canvasPx, realLength, unit,
-          color: '#ffffff', labelColor: '#ffffff', thickness: 4, fontSize: 13,
+          color: '#ffffff', labelColor: '#ffffff', thickness: 4,
+          fontSize: ptToPx(8, useStore.getState().doc.dpi),
           metersPerCanvasPx,
           parentImageId: imgObj.id,
         });
@@ -1182,7 +1183,8 @@ export default function CanvasArea() {
         rotation: 0, locked: false, visible: true,
         label: `${realLength} ${unit}`,
         length: canvasPx, realLength, unit,
-        color: '#ffffff', labelColor: '#ffffff', thickness: 4, fontSize: 13,
+        color: '#ffffff', labelColor: '#ffffff', thickness: 4,
+        fontSize: ptToPx(8, useStore.getState().doc.dpi),
         metersPerCanvasPx,
       };
       addObject(sb);
@@ -1428,7 +1430,20 @@ function createFabricObject(
           const fImg = await cached.clone() as LatexFabricImage;
           if (!fImg || typeof fImg.render !== 'function') return; // safety check
           const imgW = fImg.width ?? 100;
-          const scale = imgW > 0 ? o.width / imgW : 1;
+          // SVG is rendered at 2× (retina sharpness); display at 0.5× so it
+          // occupies its natural visual size. Never compress below the natural
+          // size — if the store width was a placeholder (e.g. 200px default),
+          // use the natural width instead and update the store so the bounding
+          // box matches what's visible.
+          const RETINA = 0.5;
+          const naturalDisplayW = imgW * RETINA;
+          const scale = RETINA;
+          if (Math.abs(o.width - naturalDisplayW) > 2) {
+            useStore.getState().updateObject(obj.id, {
+              width:  Math.round(naturalDisplayW),
+              height: Math.round((fImg.height ?? 30) * RETINA),
+            });
+          }
           fImg.set({
             left: o.x, top: o.y, angle: o.rotation,
             scaleX: scale, scaleY: scale,

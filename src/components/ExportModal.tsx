@@ -27,29 +27,40 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
   const [exportDone, setExportDone] = useState(false);
   const prevBlobRef = useRef<string>('');
 
-  // Pre-render a preview thumbnail cropped to the document area only (excludes OVERFLOW_PAD)
+  // Pre-render a preview thumbnail of the full document at export resolution.
+  // We temporarily render the canvas at export zoom so the preview truly shows
+  // the whole document rather than a viewport-cropped snapshot.
   useEffect(() => {
     const fc = fabricCanvasRef.current;
     if (!fc) return;
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const src = (fc as any).lowerCanvasEl as HTMLCanvasElement;
-      const vpt = fc.viewportTransform ?? [1, 0, 0, 1, 0, 0];
-      // Canvas-pixel position and size of the document area
-      const sx = Math.max(0, Math.round(vpt[4]));
-      const sy = Math.max(0, Math.round(vpt[5]));
-      const sw = Math.round(doc.width  * vpt[0]);
-      const sh = Math.round(doc.height * vpt[3]);
-      // Clamp to what's actually on the canvas
-      const cw = Math.min(sw, src.width  - sx);
-      const ch = Math.min(sh, src.height - sy);
-      if (cw <= 0 || ch <= 0) return;
-      const previewScale = Math.min(1, 300 / Math.max(sw, sh));
-      const dst = document.createElement('canvas');
-      dst.width  = Math.max(1, Math.round(sw * previewScale));
-      dst.height = Math.max(1, Math.round(sh * previewScale));
-      dst.getContext('2d')!.drawImage(src, sx, sy, cw, ch, 0, 0, dst.width, dst.height);
-      const url = dst.toDataURL('image/png');
+      const fc_ = fc as any;
+      const savedW      = fc.getWidth();
+      const savedH      = fc.getHeight();
+      const savedVT     = [...(fc.viewportTransform ?? [1,0,0,1,0,0])] as [number,number,number,number,number,number];
+      const savedRetina = fc_.enableRetinaScaling as boolean;
+
+      const PREV_MAX = 400;
+      const previewZoom = Math.min(1, PREV_MAX / Math.max(doc.width, doc.height));
+      const pw = Math.round(doc.width  * previewZoom);
+      const ph = Math.round(doc.height * previewZoom);
+
+      fc_.enableRetinaScaling = false;
+      fc.setDimensions({ width: pw, height: ph });
+      fc.getObjects().forEach(o => { (o as { dirty?: boolean }).dirty = true; });
+      fc.setViewportTransform([previewZoom, 0, 0, previewZoom, 0, 0]);
+      fc.renderAll();
+
+      const url = (fc_.lowerCanvasEl as HTMLCanvasElement).toDataURL('image/png');
+
+      // Restore
+      fc_.enableRetinaScaling = savedRetina;
+      fc.setDimensions({ width: savedW, height: savedH });
+      fc.setViewportTransform(savedVT);
+      fc.getObjects().forEach(o => { (o as { dirty?: boolean }).dirty = true; });
+      fc.renderAll();
+
       if (prevBlobRef.current) URL.revokeObjectURL(prevBlobRef.current);
       setPreviewUrl(url);
     } catch { /* tainted canvas — skip preview */ }
