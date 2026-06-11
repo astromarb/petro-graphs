@@ -7,8 +7,13 @@ export function isDesktop(): boolean {
 
 /** Snapshot the current store into a PersistedState. */
 function snapshot(): PersistedState {
-  const { doc, groups, insets } = useStore.getState();
-  return { doc, groups, insets };
+  const { doc, groups, insets, canvasSlots, activeSlotId } = useStore.getState();
+  const slots = canvasSlots.map(sl =>
+    sl.id === activeSlotId
+      ? { ...sl, doc: JSON.parse(JSON.stringify(doc)), groups: JSON.parse(JSON.stringify(groups)), insets: JSON.parse(JSON.stringify(insets)) }
+      : JSON.parse(JSON.stringify(sl))
+  );
+  return { doc, groups, insets, canvasSlots: slots, activeSlotId };
 }
 
 /** Write the project to a specific path (must already be allowed by the user via dialog). */

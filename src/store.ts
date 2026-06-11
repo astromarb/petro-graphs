@@ -14,6 +14,9 @@ export interface PersistedState {
   doc:    CanvasDoc;
   groups: ImageGroup[];
   insets: InsetPair[];
+  /** All open canvas slots (pages) — present in files saved with multi-page support */
+  canvasSlots?: CanvasSlot[];
+  activeSlotId?: string;
   /** File format version for forward-compat */
   version?: number;
 }
@@ -45,8 +48,15 @@ export async function loadPersistedState(): Promise<PersistedState | null> {
 
 /** Download the current project as a .petrofig JSON file. */
 export function saveProjectFile() {
-  const { doc, groups, insets } = useStore.getState();
-  const payload: PersistedState = { doc, groups, insets, version: CURRENT_VERSION };
+  const { doc, groups, insets, canvasSlots, activeSlotId } = useStore.getState();
+  // Snapshot current live state into the active slot before serialising so
+  // all pages (including the one currently displayed) are captured.
+  const slots = canvasSlots.map(sl =>
+    sl.id === activeSlotId
+      ? { ...sl, doc: JSON.parse(JSON.stringify(doc)), groups: JSON.parse(JSON.stringify(groups)), insets: JSON.parse(JSON.stringify(insets)) }
+      : JSON.parse(JSON.stringify(sl))
+  );
+  const payload: PersistedState = { doc, groups, insets, canvasSlots: slots, activeSlotId, version: CURRENT_VERSION };
   const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
@@ -73,8 +83,8 @@ export function openProjectFile(): Promise<void> {
         if (!data.doc || !Array.isArray(data.groups)) throw new Error('Invalid project file');
         useStore.getState().rehydrate(data);
         useStore.getState().markSaved();
-        // Also persist to IDB so it survives refresh
-        persist({ doc: data.doc, groups: data.groups, insets: data.insets ?? [] });
+        // Also persist to IDB so it survives refresh (pass full payload to keep all pages)
+        persist(data);
         resolve();
       } catch (e) {
         reject(e);
@@ -239,18 +249,24 @@ export const useStore = create<AppState>()(
     }),
 
     rehydrate: (saved) => set((s) => {
-      // Merge doc to preserve any new fields added since the file was saved
-      Object.assign(s.doc, saved.doc);
-      // Guard against older file formats that may omit these arrays
-      if (!Array.isArray(s.doc.objects)) s.doc.objects = [];
-      s.groups = (saved.groups ?? []) as typeof s.groups;
-      s.insets  = (saved.insets  ?? []) as typeof s.insets;
-      // Keep the active slot's snapshot in sync so slot-switching restores correctly
-      const activeSlot = s.canvasSlots.find(sl => sl.id === s.activeSlotId);
-      if (activeSlot) {
-        activeSlot.doc    = JSON.parse(JSON.stringify(s.doc));
-        activeSlot.groups = JSON.parse(JSON.stringify(s.groups));
-        activeSlot.insets = JSON.parse(JSON.stringify(s.insets));
+      if (saved.canvasSlots && saved.canvasSlots.length > 0) {
+        // Multi-page file: restore all slots and switch to the saved active one.
+        s.canvasSlots = saved.canvasSlots as typeof s.canvasSlots;
+        const targetId = saved.activeSlotId ?? s.canvasSlots[0].id;
+        const target = s.canvasSlots.find(sl => sl.id === targetId) ?? s.canvasSlots[0];
+        s.activeSlotId = target.id;
+        s.doc    = JSON.parse(JSON.stringify(target.doc));
+        s.groups = JSON.parse(JSON.stringify(target.groups));
+        s.insets = JSON.parse(JSON.stringify(target.insets));
+        if (!Array.isArray(s.doc.objects)) s.doc.objects = [];
+      } else {
+        // Legacy single-page file: restore doc and collapse to one slot.
+        Object.assign(s.doc, saved.doc);
+        if (!Array.isArray(s.doc.objects)) s.doc.objects = [];
+        s.groups = (saved.groups ?? []) as typeof s.groups;
+        s.insets  = (saved.insets  ?? []) as typeof s.insets;
+        s.canvasSlots = [{ id: 'slot-default', filePath: null, doc: JSON.parse(JSON.stringify(s.doc)), groups: JSON.parse(JSON.stringify(s.groups)), insets: JSON.parse(JSON.stringify(s.insets)) }] as typeof s.canvasSlots;
+        s.activeSlotId = 'slot-default';
       }
     }),
 

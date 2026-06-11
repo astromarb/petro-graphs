@@ -1,14 +1,14 @@
 import React, { useRef, useState, useCallback, useEffect } from 'react';
-import { X, Check, Ruler, ZoomIn, ZoomOut } from 'lucide-react';
+import { X, Check, Ruler, ZoomIn, ZoomOut, Copy } from 'lucide-react';
 import { useStore } from '../store';
-import type { ScaleUnit } from '../types';
+import type { ScaleUnit, ThinSectionImage } from '../types';
 
 const UNITS: ScaleUnit[] = ['µm', 'nm', 'mm', 'cm', 'm', 'km', 'Å'];
 
 interface Point { x: number; y: number }
 
 export default function CalibrationModal() {
-  const { calibrationQueue, shiftCalibration, updateImageCalibration } = useStore();
+  const { calibrationQueue, shiftCalibration, updateImageCalibration, groups } = useStore();
   const item = calibrationQueue[0];
 
   const canvasRef    = useRef<HTMLCanvasElement>(null);
@@ -101,6 +101,21 @@ export default function CalibrationModal() {
 
   const canConfirm = pts.length === 2 && parseFloat(realLength) > 0;
 
+  // All calibrated images in the library other than the one being calibrated
+  const calibratedImages: (ThinSectionImage & { groupName: string })[] = item
+    ? groups.flatMap(g =>
+        g.images
+          .filter(img => img.calibration && img.id !== item.image.id)
+          .map(img => ({ ...img, groupName: g.name }))
+      )
+    : [];
+
+  const applyCopied = (src: ThinSectionImage) => {
+    if (!item || !src.calibration) return;
+    updateImageCalibration(item.groupId, item.image.id, { ...src.calibration });
+    shiftCalibration();
+  };
+
   const handleConfirm = () => {
     if (!item || !canConfirm) return;
     const real = parseFloat(realLength);
@@ -137,9 +152,47 @@ export default function CalibrationModal() {
           </button>
         </div>
 
+        {/* Copy from calibrated image shortcut */}
+        {calibratedImages.length > 0 && (
+          <div style={{
+            background: 'var(--surface-3, var(--surface-2))',
+            border: '1px solid var(--border)',
+            borderRadius: 7,
+            padding: '10px 12px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 7,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600 }}>
+              <Copy size={12} />
+              Copy calibration from another image
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+              Images taken at the same magnification share the same scale. Click an image below to apply its calibration directly.
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {calibratedImages.map(img => (
+                <button
+                  key={img.id}
+                  className="btn btn-ghost"
+                  style={{ fontSize: 11, padding: '3px 10px', display: 'flex', alignItems: 'center', gap: 4 }}
+                  onClick={() => applyCopied(img)}
+                  title={`${img.calibration!.refRealLength} ${img.calibration!.unit} / ${Math.round(img.calibration!.refPixelDistance)} px`}
+                >
+                  <Ruler size={10} color="#3ecf8e" />
+                  {img.groupName} — {img.name}
+                  <span style={{ color: 'var(--text-muted)', marginLeft: 2 }}>
+                    ({img.calibration!.refRealLength} {img.calibration!.unit})
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Instructions */}
         <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-          Click two points over a feature of known length. Scroll to zoom.
+          Or pick two points manually — click over a feature of known length. Scroll to zoom.
           {pts.length === 0 && ' → Click the first point.'}
           {pts.length === 1 && ' → Click the second point.'}
           {pts.length === 2 && ' → Points set. Enter the real-world length below.'}

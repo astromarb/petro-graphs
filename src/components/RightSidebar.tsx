@@ -11,7 +11,7 @@ import {
 import { useStore } from '../store';
 import type {
   CanvasObject, ImageObject, TextObject, ShapeObject, ScaleBarObject,
-  BorderStyle, ImageAdjustments, ScaleBarObject as SBO, TextStyle,
+  BorderStyle, ImageAdjustments, ScaleBarObject as SBO, TextStyle, ThinSectionImage,
 } from '../types';
 import { DEFAULT_ADJUSTMENTS, TEXT_STYLE_PRESETS } from '../types';
 import { BORDER_COLORS as COLORS, niceScaleBar, UNIT_METERS, convertUnit, ptToPx, pxToPt } from '../utils';
@@ -215,9 +215,20 @@ function AdjustmentsPanel({ adj, onChange }: {
 
 // ── Image object panel ───────────────────────────────────────────────────
 function ImagePanel({ obj, update, dpi }: { obj: ImageObject; update: (p: Partial<ImageObject>) => void; dpi: number }) {
-  const { groups, addObject, pushCalibration } = useStore();
+  const { groups, addObject, pushCalibration, updateImageCalibration } = useStore();
   const srcImg = groups.flatMap(g => g.images).find(i => i.id === obj.imageId);
   const cal = srcImg?.calibration;
+
+  const calibratedImages: (ThinSectionImage & { groupName: string })[] = groups.flatMap(g =>
+    g.images
+      .filter(img => img.calibration && img.id !== obj.imageId)
+      .map(img => ({ ...img, groupName: g.name }))
+  );
+
+  const applyCopied = (src: ThinSectionImage) => {
+    if (!src.calibration) return;
+    updateImageCalibration(obj.groupId, obj.imageId, { ...src.calibration });
+  };
   const adj = obj.adjustments ?? { ...DEFAULT_ADJUSTMENTS };
 
   const generateScaleBar = () => {
@@ -293,10 +304,34 @@ function ImagePanel({ obj, update, dpi }: { obj: ImageObject; update: (p: Partia
             <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
               Not calibrated. Set scale to enable scale bar generation.
             </div>
+            {calibratedImages.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Copy from calibrated image
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {calibratedImages.map(img => (
+                    <button
+                      key={img.id}
+                      className="btn btn-ghost"
+                      style={{ fontSize: 11, justifyContent: 'flex-start', gap: 6 }}
+                      onClick={() => applyCopied(img)}
+                      title={`${img.calibration!.unitsPerPixel.toExponential(3)} ${img.calibration!.unit}/px`}
+                    >
+                      <Ruler size={10} color="#3ecf8e" />
+                      {img.groupName} — {img.name}
+                      <span style={{ color: 'var(--text-muted)', marginLeft: 'auto' }}>
+                        {img.calibration!.refRealLength} {img.calibration!.unit}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             {srcImg && (
               <button className="btn btn-ghost" style={{ fontSize: 11 }}
                 onClick={() => pushCalibration(obj.groupId, srcImg)}>
-                <Ruler size={11} /> Set calibration
+                <Ruler size={11} /> Set calibration manually
               </button>
             )}
           </div>
