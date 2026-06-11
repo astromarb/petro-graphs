@@ -222,6 +222,9 @@ export default function CanvasArea() {
   // ── Mode tag labels: storeId → { bg, tag } ───────────────────────────
   const modeTagMapRef = useRef<Map<string, { bg: fabric.Rect; tag: fabric.Text }>>(new Map());
 
+  // ── Scale bar floating labels: storeId → FabricImage ─────────────────
+  const sbLabelMapRef = useRef<Map<string, fabric.FabricImage>>(new Map());
+
   // ── Refs to latest values (used in stable fabric event handlers) ──────
   const toolRef = useRef(tool);
   useEffect(() => { toolRef.current = tool; }, [tool]);
@@ -723,12 +726,18 @@ export default function CanvasArea() {
       if (id && !storeIds.has(id)) toRemove.push(fObj);
     });
     toRemove.forEach(o => {
+      const id = (o as fabric.FabricObject & { storeId?: string }).storeId!;
       fc.remove(o);
-      objMapRef.current.delete((o as fabric.FabricObject & { storeId?: string }).storeId!);
+      objMapRef.current.delete(id);
+      // Remove the floating label that belongs to this scale bar (if any)
+      const orphanLabel = sbLabelMapRef.current.get(id);
+      if (orphanLabel) { fc.remove(orphanLabel); sbLabelMapRef.current.delete(id); }
     });
 
     doc.objects.forEach(obj => {
-      const existing = objMapRef.current.get(obj.id) as (fabric.FabricObject & { storeId?: string; _latexKey?: string }) | undefined;
+      const existing = objMapRef.current.get(obj.id) as (fabric.FabricObject & {
+        storeId?: string; _latexKey?: string; _sbKey?: string;
+      }) | undefined;
       if (existing) {
         // Sentinel: async render is in flight — don't sync or re-create yet
         if (!('storeId' in existing)) return;
@@ -740,13 +749,41 @@ export default function CanvasArea() {
           if (existing._latexKey !== newKey) {
             fc.remove(existing);
             objMapRef.current.delete(obj.id);
-            createFabricObject(obj, groups, fc, objMapRef.current);
+            createFabricObject(obj, groups, fc, objMapRef.current, sbLabelMapRef.current);
             return;
           }
         }
+
+        // Scale bars: recreate when visual content changes; otherwise sync position + label
+        if (obj.type === 'scalebar') {
+          const o = obj as ScaleBarObject;
+          const newSbKey = `${o.realLength}||${o.unit}||${o.length}||${o.thickness}||${o.color}||${o.labelColor}||${o.fontSize}`;
+          if (existing._sbKey !== newSbKey) {
+            // Content changed — remove group and old label, recreate
+            const oldLabel = sbLabelMapRef.current.get(obj.id);
+            if (oldLabel) { fc.remove(oldLabel); sbLabelMapRef.current.delete(obj.id); }
+            fc.remove(existing);
+            objMapRef.current.delete(obj.id);
+            createFabricObject(obj, groups, fc, objMapRef.current, sbLabelMapRef.current);
+            return;
+          }
+          // Only position/rotation changed — sync group and move label
+          syncFabricProps(existing, obj);
+          const lbl = sbLabelMapRef.current.get(obj.id);
+          if (lbl) {
+            lbl.set({
+              left: o.x + o.length / 2,
+              top:  o.y + o.thickness + 6,
+              angle: o.rotation,
+            });
+            lbl.setCoords();
+          }
+          return;
+        }
+
         syncFabricProps(existing, obj);
       } else {
-        createFabricObject(obj, groups, fc, objMapRef.current);
+        createFabricObject(obj, groups, fc, objMapRef.current, sbLabelMapRef.current);
       }
     });
 
@@ -1149,6 +1186,7 @@ function createFabricObject(
   groups: ReturnType<typeof useStore.getState>['groups'],
   fc: fabric.Canvas,
   map: Map<string, fabric.FabricObject>,
+  sbLabelMap?: Map<string, fabric.FabricImage>,
 ) {
   if (obj.type === 'image') {
     const group = groups.find(g => g.id === obj.groupId);
@@ -1272,12 +1310,14 @@ function createFabricObject(
     });
 
     const labelLatex = `\\text{${o.realLength}\\,${o.unit}}`;
+    const sbKey = `${o.realLength}||${o.unit}||${o.length}||${o.thickness}||${o.color}||${o.labelColor}||${o.fontSize}`;
     const grp = new fabric.Group([bar, capL, capR], {
       left: o.x, top: o.y, angle: o.rotation,
       originX: 'left', originY: 'top',
     });
 
-    (grp as typeof grp & { storeId: string }).storeId = obj.id;
+    (grp as typeof grp & { storeId: string; _sbKey: string }).storeId = obj.id;
+    (grp as typeof grp & { storeId: string; _sbKey: string })._sbKey  = sbKey;
     fc.add(grp);
     map.set(obj.id, grp);
 
@@ -1288,6 +1328,9 @@ function createFabricObject(
       fabric.FabricImage.fromURL(dataUrl).then((lbl) => {
         if (!lbl || typeof lbl.render !== 'function') return;
         if (!fc.getElement()) return;
+        // Guard: if bar was already replaced (key mismatch), discard this stale render
+        const currentGrp = map.get(obj.id) as (fabric.FabricObject & { _sbKey?: string }) | undefined;
+        if (!currentGrp || currentGrp._sbKey !== sbKey) return;
         const scale = Math.min(1, o.length / width);
         lbl.set({
           left: o.x + o.length / 2,
@@ -1301,6 +1344,10 @@ function createFabricObject(
           evented: false,
         });
         (lbl as typeof lbl & { _scalebarLabel: string })._scalebarLabel = obj.id;
+        // Remove any previous label before adding the new one
+        const prevLabel = sbLabelMap?.get(obj.id);
+        if (prevLabel) { fc.remove(prevLabel); }
+        sbLabelMap?.set(obj.id, lbl);
         fc.add(lbl);
         fc.renderAll();
       });
