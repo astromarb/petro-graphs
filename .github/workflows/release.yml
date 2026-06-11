@@ -121,3 +121,28 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           updaterJsonKeepUniversal: true
           args: ${{ matrix.args }}
+
+      - name: Patch Linux AppImage with dependency pre-flight check
+        if: matrix.platform == 'ubuntu-22.04' && startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          APPIMAGE=$(find src-tauri/target/release/bundle/appimage -name "*.AppImage" | head -1)
+          [ -z "$APPIMAGE" ] && { echo "No AppImage found — skipping patch"; exit 0; }
+          echo "Patching: $APPIMAGE"
+
+          # Extract (AppImage runtime built-in flag — no FUSE required on CI)
+          APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGE" --appimage-extract
+
+          # Replace AppRun with the pre-flight check script from the repo
+          cp .github/appimage-preflight.sh squashfs-root/AppRun
+          chmod +x squashfs-root/AppRun
+
+          # Download appimagetool and repack
+          wget -qO appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 ./appimagetool squashfs-root/ "$APPIMAGE"
+
+          # Replace the asset already uploaded to the draft release
+          gh release upload "${{ github.ref_name }}" "$APPIMAGE" --clobber
