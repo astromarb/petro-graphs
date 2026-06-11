@@ -118,6 +118,6 @@ jobs:
 
             > Built with Tauri v2, Rust, React 19, and Fabric.js 7.
           releaseDraft: true
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
           updaterJsonKeepUniversal: true
           args: ${{ matrix.args }}
