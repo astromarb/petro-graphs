@@ -1,21 +1,8 @@
-## Petro Graphs v0.1.6 [![PR Checks](https://github.com/astromarb/petro-graphs/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/astromarb/petro-graphs/actions/workflows/ci.yml)
-<p align="center"> <img width="125" height="125" alt="image" src="https://github.com/user-attachments/assets/45decd6a-1a68-43d3-a572-47fee3dcc20d" /> </p>
+## Petro Graphs [![PR Checks](https://github.com/astromarb/petro-graphs/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/astromarb/petro-graphs/actions/workflows/ci.yml)
 
 **Desktop application for composing, annotating, and exporting geological photomicrograph figures, purpose-built for cross-polarized and plane-polarized light (XPL/PPL) thin-section photography.**
 
 ---
-
-### Download and install
-| Platform | File | Notes |
-|---|---|---|
-| **Windows 10/11** | `Petro-Graphs_..._x64-setup.exe` | Run the NSIS installer |
-| **macOS (Universal)** | `Petro-Graphs_..._universal.dmg` | Open the DMG and drag Petro Graphs into Applications |
-| **Linux (x64)** | `petro-graphs_..._amd64.AppImage` | Run `chmod +x <filename>`, then launch it |
-
-### First launch notes:
-- **Windows:** SmartScreen may warn about an unknown publisher. Select **More info → Run anyway**.
-- **macOS:** Gatekeeper may block the first launch. Right-click the application and select **Open → Open**.
-- **Linux:** Requires a Wayland or X11 desktop environment with WebKit2GTK 4.1.
 
 > Built with Tauri 2, Rust, React 19, TypeScript, and Fabric.js 7.
 ---
