@@ -255,6 +255,13 @@ export default function LeftSidebar() {
   const [canvasW, setCanvasW] = useState(String(doc.width));
   const [canvasH, setCanvasH] = useState(String(doc.height));
 
+  // Keep the inputs in sync when the doc changes from elsewhere
+  // (rehydrate from IndexedDB, opening a project file, undo/redo).
+  useEffect(() => {
+    setCanvasW(String(doc.width));
+    setCanvasH(String(doc.height));
+  }, [doc.width, doc.height]);
+
   const applySize = () => {
     const w = parseInt(canvasW);
     const h = parseInt(canvasH);

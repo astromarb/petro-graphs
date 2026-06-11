@@ -27,22 +27,44 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
   const [exportDone, setExportDone] = useState(false);
   const prevBlobRef = useRef<string>('');
 
-  // Pre-render a small preview thumbnail from the live canvas
+  // Pre-render a preview thumbnail of the full document at export resolution.
+  // We temporarily render the canvas at export zoom so the preview truly shows
+  // the whole document rather than a viewport-cropped snapshot.
   useEffect(() => {
     const fc = fabricCanvasRef.current;
     if (!fc) return;
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const src = (fc as any).lowerCanvasEl as HTMLCanvasElement;
-      const scale = 0.25;
-      const dst = document.createElement('canvas');
-      dst.width  = Math.round(src.width  * scale);
-      dst.height = Math.round(src.height * scale);
-      dst.getContext('2d')!.drawImage(src, 0, 0, dst.width, dst.height);
-      const url = dst.toDataURL('image/png');
+      const fc_ = fc as any;
+      const savedW      = fc.getWidth();
+      const savedH      = fc.getHeight();
+      const savedVT     = [...(fc.viewportTransform ?? [1,0,0,1,0,0])] as [number,number,number,number,number,number];
+      const savedRetina = fc_.enableRetinaScaling as boolean;
+
+      const PREV_MAX = 400;
+      const previewZoom = Math.min(1, PREV_MAX / Math.max(doc.width, doc.height));
+      const pw = Math.round(doc.width  * previewZoom);
+      const ph = Math.round(doc.height * previewZoom);
+
+      fc_.enableRetinaScaling = false;
+      fc.setDimensions({ width: pw, height: ph });
+      fc.getObjects().forEach(o => { (o as { dirty?: boolean }).dirty = true; });
+      fc.setViewportTransform([previewZoom, 0, 0, previewZoom, 0, 0]);
+      fc.renderAll();
+
+      const url = (fc_.lowerCanvasEl as HTMLCanvasElement).toDataURL('image/png');
+
+      // Restore
+      fc_.enableRetinaScaling = savedRetina;
+      fc.setDimensions({ width: savedW, height: savedH });
+      fc.setViewportTransform(savedVT);
+      fc.getObjects().forEach(o => { (o as { dirty?: boolean }).dirty = true; });
+      fc.renderAll();
+
       if (prevBlobRef.current) URL.revokeObjectURL(prevBlobRef.current);
       setPreviewUrl(url);
     } catch { /* tainted canvas — skip preview */ }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const doExport = async () => {
