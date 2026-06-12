@@ -80,8 +80,9 @@ export default function ExportModal({ fabricCanvasRef, onClose }: Props) {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const fc_ = fc as any;
-    const savedW      = fc.getWidth();
-    const savedH      = fc.getHeight();
+    // Save doc pixel dimensions (not zoomed CSS size) so finally restores correctly.
+    const savedW      = doc.width;
+    const savedH      = doc.height;
     const savedVT     = [...(fc.viewportTransform ?? [1,0,0,1,0,0])] as [number,number,number,number,number,number];
     const savedRetina = fc_.enableRetinaScaling as boolean;
 
